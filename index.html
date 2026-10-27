@@ -1,0 +1,779 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="카드 가리개">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex">
+<title>카드 가리개</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;600&family=Noto+Sans+KR:wght@400;500;700;800&display=swap">
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+<style>
+html { -webkit-text-size-adjust: 100%; color-scheme: light; }
+[hidden] { display: none !important; }
+/* 레이아웃: 작업대형. 왼쪽에 큰 사진 캔버스, 오른쪽에 단계별 패널. 폰에서는 세로로 쌓임. */
+:root {
+  --bg: #E8EBEF;
+  --surface: #F6F7F9;
+  --stage: #D3D8DE;
+  --fg: #14181D;
+  --muted: #5B6571;
+  --line: #C4CBD4;
+  --accent: #1F4FD8;
+  --accent-fg: #FFFFFF;
+  --bar: #0B0D10;
+  --ok: #17703F;
+  --warn: #9A5300;
+  --font-body: "Noto Sans KR", system-ui, -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0E1115; --surface: #171B21; --stage: #080A0D; --fg: #E7EAEE; --muted: #9AA4B0;
+    --line: #2B323B; --accent: #7EA2FF; --accent-fg: #0E1115; --bar: #000000; --ok: #5FD08F; --warn: #F0B35B;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0E1115; --surface: #171B21; --stage: #080A0D; --fg: #E7EAEE; --muted: #9AA4B0;
+  --line: #2B323B; --accent: #7EA2FF; --accent-fg: #0E1115; --bar: #000000; --ok: #5FD08F; --warn: #F0B35B;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.6;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-top: max(20px, env(safe-area-inset-top, 0px));
+  padding-bottom: max(40px, env(safe-area-inset-bottom, 0px));
+  margin: 0;
+}
+.wrap { max-width: 1120px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+
+.top h1 { margin: 0; font-size: 30px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.2; text-wrap: balance; }
+.lede { margin: 6px 0 0; color: var(--muted); max-width: 62ch; }
+
+.bench { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+@media (max-width: 860px) { .bench { grid-template-columns: minmax(0, 1fr); } }
+
+.stagecol { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.stage {
+  background: var(--stage);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 12px;
+  display: flex;
+  justify-content: center;
+}
+#view { display: block; touch-action: none; cursor: crosshair; max-width: 100%; }
+.hint { margin: 0; font-size: 14px; min-height: 3em; }
+.hint b { font-weight: 700; }
+
+.panel { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.step { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 14px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.step h2 { margin: 0; font-size: 13px; font-weight: 700; letter-spacing: 0.06em; font-family: var(--font-mono); color: var(--muted); text-transform: uppercase; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.btn {
+  font: inherit; font-weight: 500; color: var(--fg); background: transparent;
+  border: 1px solid var(--line); border-radius: 4px; padding: 8px 14px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; line-height: 1.3; min-height: 40px;
+}
+.btn:hover { border-color: var(--fg); }
+.btn.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); font-weight: 700; }
+.btn.primary:hover { filter: brightness(1.08); }
+.btn.small { min-height: 32px; padding: 4px 10px; font-size: 13px; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+input[type="file"] { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+input[type="file"]:focus-visible + label { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.slider { display: grid; grid-template-columns: 5.5em minmax(0, 1fr) 3.4em; gap: 10px; align-items: center; font-size: 14px; }
+.slider output { font-family: var(--font-mono); text-align: right; font-variant-numeric: tabular-nums; }
+input[type="range"] { width: 100%; accent-color: var(--accent); }
+
+.tool { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; border: 1px solid var(--line); border-radius: 4px; padding: 8px 10px; }
+.tool.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.tool label { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 10px; align-items: center; cursor: pointer; }
+.tool input { accent-color: var(--accent); width: 18px; height: 18px; margin: 0; }
+.tool .name { font-weight: 700; }
+.tool .state { grid-column: 2; font-size: 13px; color: var(--muted); }
+.tool .state.set { color: var(--ok); }
+.note { margin: 0; font-size: 13px; color: var(--muted); }
+
+.result { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+@media (max-width: 860px) { .result { grid-template-columns: minmax(0, 1fr); } }
+.result .shot { background: var(--stage); border: 1px solid var(--line); border-radius: 6px; padding: 12px; display: flex; justify-content: center; min-height: 120px; }
+.result img { display: block; max-width: 100%; height: auto; }
+.empty { align-self: center; color: var(--muted); margin: 0; font-size: 14px; }
+.report { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
+.report li { display: grid; grid-template-columns: 1.4em minmax(0, 1fr); }
+.report .mark { font-family: var(--font-mono); font-weight: 600; }
+.report .ok .mark { color: var(--ok); }
+.report .miss .mark { color: var(--warn); }
+
+.toast {
+  position: fixed; left: 50%; bottom: calc(20px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%);
+  background: var(--fg); color: var(--bg); padding: 10px 16px; border-radius: 4px; font-size: 14px; max-width: min(92vw, 420px); z-index: 20;
+}
+@media (prefers-reduced-motion: no-preference) { .toast { transition: opacity .2s; } }
+.auto { display: flex; flex-direction: column; gap: 8px; }
+.auto .msg { margin: 0; font-size: 14px; min-height: 1.6em; }
+.auto .msg.busy { color: var(--accent); }
+.auto .msg.warn { color: var(--warn); }
+.auto .msg.ok { color: var(--ok); }
+.bar { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
+.bar > i { display: block; height: 100%; width: 0; background: var(--accent); }
+</style>
+</head>
+<body>
+<main class="wrap">
+  <header class="top">
+    <h1>카드 가리개</h1>
+    <p class="lede">카드 사진에서 번호 가운데 8자리, 유효기간, CVC를 검은 칸으로 지워 줍니다. 사진은 이 브라우저 안에서만 처리되고 어디로도 전송되지 않습니다.</p>
+  </header>
+
+  <div class="bench">
+    <section class="stagecol" aria-label="사진 작업 영역">
+      <div class="stage" id="stage"><canvas id="view" aria-label="카드 사진. 드래그해서 가릴 영역을 지정합니다."></canvas></div>
+      <p class="hint" id="hint"></p>
+    </section>
+
+    <aside class="panel">
+      <section class="step" aria-labelledby="s1">
+        <h2 id="s1">1 · 사진</h2>
+        <div class="row">
+          <input id="fileCam" type="file" accept="image/*" capture="environment">
+          <label class="btn primary" for="fileCam">카메라로 촬영</label>
+          <input id="fileAlbum" type="file" accept="image/*">
+          <label class="btn" for="fileAlbum">앨범에서 선택</label>
+          <button class="btn" id="sampleBtn" type="button">예시 카드</button>
+        </div>
+        <div class="row">
+          <button class="btn small" id="rotL" type="button">왼쪽 90° 돌리기</button>
+          <button class="btn small" id="rotR" type="button">오른쪽 90° 돌리기</button>
+        </div>
+        <div class="slider">
+          <label for="fine">기울기 보정</label>
+          <input id="fine" type="range" min="-20" max="20" step="0.5" value="0">
+          <output id="fineOut" for="fine">0°</output>
+        </div>
+        <p class="note">돌리거나 기울기를 바꾸면 자동으로 다시 찾습니다. 글자가 가로로 똑바로 읽히게 맞출수록 잘 찾습니다.</p>
+      </section>
+
+      <section class="step" aria-labelledby="s2">
+        <h2 id="s2">2 · 가릴 곳</h2>
+        <div class="auto">
+          <button class="btn primary" id="autoBtn" type="button">자동으로 찾기</button>
+          <p class="msg" id="autoMsg" role="status" aria-live="polite">사진을 고르면 카드번호, 유효기간, CVC를 자동으로 찾습니다.</p>
+          <div class="bar" id="autoBar" hidden><i id="autoFill"></i></div>
+        </div>
+        <div id="tools" role="radiogroup" aria-label="지정할 항목"></div>
+        <div class="slider">
+          <label for="midStart">가림 시작</label>
+          <input id="midStart" type="range" min="5" max="45" step="0.5" value="24">
+          <output id="midStartOut" for="midStart">24%</output>
+        </div>
+        <div class="slider">
+          <label for="midEnd">가림 끝</label>
+          <input id="midEnd" type="range" min="55" max="95" step="0.5" value="76">
+          <output id="midEndOut" for="midEnd">76%</output>
+        </div>
+        <p class="note">자동으로 찾은 영역은 반드시 눈으로 확인하세요. 검은 칸이 앞 4자리나 뒤 4자리에 닿거나, 가운데 8자리가 조금이라도 보이면 슬라이더나 끌기로 고치세요.</p>
+      </section>
+
+      <section class="step" aria-labelledby="s3">
+        <h2 id="s3">3 · 결과</h2>
+        <button class="btn primary" id="makeBtn" type="button">가려진 사진 만들기</button>
+      </section>
+    </aside>
+  </div>
+
+  <section class="result" aria-label="결과">
+    <div class="shot" id="shot">
+      <p class="empty" id="emptyRes">‘가려진 사진 만들기’를 누르면 여기에 결과가 나옵니다.</p>
+      <img id="resImg" alt="가려진 카드 사진" hidden>
+    </div>
+    <div class="step">
+      <h2>확인</h2>
+      <ul class="report" id="report"></ul>
+      <p class="note" id="saveNote" hidden>저장: ‘사진 앱에 저장’ 버튼을 누르거나, 사진을 길게 눌러 ‘사진에 추가’를 고르세요. 결과 파일에는 촬영 위치 같은 원본 메타데이터가 들어 있지 않습니다.</p>
+      <div class="row"><button class="btn primary" id="shareBtn" type="button" hidden>사진 앱에 저장 (공유)</button><button class="btn small" id="copyBtn" type="button" hidden>이미지 복사</button></div>
+    </div>
+  </section>
+</main>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var stage = $('stage'), view = $('view'), vctx = view.getContext('2d');
+  var LABEL = { num: '카드번호 줄', exp: '유효기간', cvc: 'CVC' };
+  var HINT = {
+    num: '<b>카드번호 줄</b>: 맨 앞 숫자의 왼쪽 끝부터 맨 뒤 숫자의 오른쪽 끝까지 16자리 전체를 사각형으로 감싸세요. 가운데 8자리는 자동으로 계산해 검게 칠하고 앞뒤 4자리는 남깁니다.',
+    exp: '<b>유효기간</b>: 월/연도(예: 12/29) 부분만 사각형으로 감싸세요.',
+    cvc: '<b>CVC</b>: 카드 뒷면 서명란 옆의 3자리 숫자를 사각형으로 감싸세요.'
+  };
+  var src = null, work = null, rot90 = 0, fine = 0;
+  var boxes = { num: null, exp: null, cvc: null };
+  var active = 'num', midStart = 24, midEnd = 76;
+  var scale = 1, cssW = 0, cssH = 0, drag = null, lastBlob = null, lastUrl = null, isSample = false;
+
+  /* ---------- 도구 목록 ---------- */
+  var toolsEl = $('tools');
+  ['num', 'exp', 'cvc'].forEach(function (k) {
+    var d = document.createElement('div');
+    d.className = 'tool'; d.id = 'tool-' + k;
+    d.innerHTML = '<label><input type="radio" name="tool" value="' + k + '"' + (k === 'num' ? ' checked' : '') + '>' +
+      '<span class="name">' + LABEL[k] + '</span><span class="state" id="st-' + k + '"></span></label>' +
+      '<button type="button" class="btn small" data-clear="' + k + '">지우기</button>';
+    toolsEl.appendChild(d);
+    d.querySelector('input').addEventListener('change', function () { active = k; refreshUI(); render(); });
+    d.querySelector('button').addEventListener('click', function () { boxes[k] = null; refreshUI(); render(); });
+  });
+
+  function refreshUI() {
+    ['num', 'exp', 'cvc'].forEach(function (k) {
+      var st = $('st-' + k);
+      st.textContent = boxes[k] ? '지정됨' : '아직 지정 안 됨';
+      st.className = 'state' + (boxes[k] ? ' set' : '');
+      $('tool-' + k).className = 'tool' + (k === active ? ' on' : '');
+    });
+    $('hint').innerHTML = HINT[active] + (boxes[active] ? ' 모서리 사각형을 끌면 크기, 안쪽을 끌면 위치가 바뀝니다. 새로 그리려면 먼저 ‘지우기’를 누르세요.' : '');
+    $('makeBtn').disabled = !work;
+  }
+  function toast(msg) {
+    var t = $('toast'); t.textContent = msg; t.hidden = false;
+    clearTimeout(toast._t); toast._t = setTimeout(function () { t.hidden = true; }, 3200);
+  }
+
+  /* ---------- 사진 불러오기·회전 ---------- */
+  function setSource(canvas, presetBoxes) {
+    var max = 2200, s = Math.min(1, max / Math.max(canvas.width, canvas.height));
+    src = document.createElement('canvas');
+    src.width = Math.round(canvas.width * s); src.height = Math.round(canvas.height * s);
+    src.getContext('2d').drawImage(canvas, 0, 0, src.width, src.height);
+    rot90 = 0; fine = 0; $('fine').value = 0; $('fineOut').textContent = '0°';
+    rebuild();
+    boxes = { num: null, exp: null, cvc: null };
+    if (presetBoxes) {
+      ['num', 'exp', 'cvc'].forEach(function (k) {
+        var b = presetBoxes[k];
+        boxes[k] = b ? { x: b.x * s, y: b.y * s, w: b.w * s, h: b.h * s } : null;
+      });
+    }
+    refreshUI(); render();
+  }
+  function rebuild() {
+    var th = (rot90 * 90 + fine) * Math.PI / 180, w = src.width, h = src.height;
+    var cw = Math.abs(w * Math.cos(th)) + Math.abs(h * Math.sin(th));
+    var ch = Math.abs(w * Math.sin(th)) + Math.abs(h * Math.cos(th));
+    work = document.createElement('canvas'); work.width = Math.round(cw); work.height = Math.round(ch);
+    var c = work.getContext('2d');
+    c.fillStyle = '#0b0d10'; c.fillRect(0, 0, work.width, work.height);
+    c.translate(work.width / 2, work.height / 2); c.rotate(th); c.drawImage(src, -w / 2, -h / 2);
+    layout();
+  }
+  function onRotate() {
+    boxes = { num: null, exp: null, cvc: null };
+    isSample = false;
+    rebuild(); refreshUI(); render();
+    autoDetect();
+  }
+  $('rotL').addEventListener('click', function () { if (!src) return; rot90 = (rot90 + 3) % 4; onRotate(); });
+  $('rotR').addEventListener('click', function () { if (!src) return; rot90 = (rot90 + 1) % 4; onRotate(); });
+  $('fine').addEventListener('input', function (e) {
+    fine = parseFloat(e.target.value); $('fineOut').textContent = fine + '°';
+  });
+  $('fine').addEventListener('change', function () { if (src) onRotate(); });
+
+  function loadFile(file) {
+    if (!file) return;
+    var done = function (drawable, w, h) {
+      var c = document.createElement('canvas'); c.width = w; c.height = h;
+      c.getContext('2d').drawImage(drawable, 0, 0);
+      isSample = false; setSource(c, null);
+      autoDetect();
+    };
+    if (window.createImageBitmap) {
+      createImageBitmap(file).then(function (bm) { done(bm, bm.width, bm.height); }, fallback);
+    } else { fallback(); }
+    function fallback() {
+      var url = URL.createObjectURL(file), im = new Image();
+      im.onload = function () { done(im, im.naturalWidth, im.naturalHeight); URL.revokeObjectURL(url); };
+      im.onerror = function () { toast('이 사진을 열 수 없습니다. 다른 사진을 선택하세요.'); };
+      im.src = url;
+    }
+  }
+  ['fileCam', 'fileAlbum'].forEach(function (id) {
+    $(id).addEventListener('change', function (e) { loadFile(e.target.files[0]); e.target.value = ''; });
+  });
+
+  /* ---------- 캔버스 표시 ---------- */
+  function layout() {
+    if (!work) return;
+    var avail = Math.max(240, stage.clientWidth - 24);
+    var maxH = Math.max(300, window.innerHeight * 0.72);
+    cssW = Math.min(avail, maxH * work.width / work.height);
+    cssH = cssW * work.height / work.width;
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    view.style.width = cssW + 'px'; view.style.height = cssH + 'px';
+    view.width = Math.round(cssW * dpr); view.height = Math.round(cssH * dpr);
+    vctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    scale = work.width / cssW;
+  }
+  function toDisp(b) { return { x: b.x / scale, y: b.y / scale, w: b.w / scale, h: b.h / scale }; }
+  function tag(text, x, y) {
+    vctx.font = '700 12px ' + getComputedStyle(document.body).fontFamily;
+    var tw = vctx.measureText(text).width + 10, ty = y - 20 < 0 ? y + 4 : y - 20;
+    vctx.fillStyle = '#1F4FD8'; vctx.fillRect(x, ty, tw, 18);
+    vctx.fillStyle = '#fff'; vctx.textBaseline = 'middle'; vctx.fillText(text, x + 5, ty + 9);
+  }
+  function render() {
+    if (!work) return;
+    vctx.clearRect(0, 0, cssW, cssH);
+    vctx.drawImage(work, 0, 0, cssW, cssH);
+    ['num', 'exp', 'cvc'].forEach(function (k) {
+      var b = boxes[k]; if (!b) return;
+      var d = toDisp(b);
+      vctx.fillStyle = '#000';
+      if (k === 'num') {
+        var mx = d.x + d.w * midStart / 100, mw = d.w * (midEnd - midStart) / 100;
+        vctx.fillRect(mx, d.y - 2, mw, d.h + 4);
+        vctx.setLineDash([5, 4]); vctx.lineWidth = 2; vctx.strokeStyle = '#1F4FD8';
+        vctx.strokeRect(d.x, d.y, d.w, d.h); vctx.setLineDash([]);
+        vctx.fillStyle = 'rgba(255,255,255,.9)';
+        vctx.fillRect(d.x + d.w * midStart / 100 - 1, d.y - 6, 2, 6);
+        vctx.fillRect(d.x + d.w * midEnd / 100 - 1, d.y - 6, 2, 6);
+      } else {
+        vctx.fillRect(d.x - 2, d.y - 2, d.w + 4, d.h + 4);
+        vctx.lineWidth = 2; vctx.strokeStyle = '#1F4FD8'; vctx.strokeRect(d.x - 2, d.y - 2, d.w + 4, d.h + 4);
+      }
+      tag(LABEL[k], d.x, d.y);
+      if (k === active) {
+        vctx.fillStyle = '#1F4FD8'; vctx.fillRect(d.x + d.w - 7, d.y + d.h - 7, 14, 14);
+        vctx.strokeStyle = '#fff'; vctx.lineWidth = 2; vctx.strokeRect(d.x + d.w - 7, d.y + d.h - 7, 14, 14);
+      }
+    });
+  }
+
+  /* ---------- 영역 지정 (그리기·이동·크기 조절) ---------- */
+  function pos(e) {
+    var r = view.getBoundingClientRect();
+    return { x: Math.max(0, Math.min(cssW, e.clientX - r.left)), y: Math.max(0, Math.min(cssH, e.clientY - r.top)) };
+  }
+  view.addEventListener('pointerdown', function (e) {
+    if (!work) return;
+    var p = pos(e), b = boxes[active];
+    drag = null;
+    if (b) {
+      var d = toDisp(b), hs = 22;
+      if (Math.abs(p.x - (d.x + d.w)) < hs && Math.abs(p.y - (d.y + d.h)) < hs) drag = { mode: 'resize', p0: p, orig: { x: b.x, y: b.y, w: b.w, h: b.h } };
+      else if (p.x >= d.x && p.x <= d.x + d.w && p.y >= d.y && p.y <= d.y + d.h) drag = { mode: 'move', p0: p, orig: { x: b.x, y: b.y, w: b.w, h: b.h } };
+      else return;
+    } else {
+      drag = { mode: 'draw', p0: p };
+      boxes[active] = { x: p.x * scale, y: p.y * scale, w: 0, h: 0 };
+    }
+    view.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+  view.addEventListener('pointermove', function (e) {
+    if (!drag) return;
+    var p = pos(e), b = boxes[active], dx = (p.x - drag.p0.x) * scale, dy = (p.y - drag.p0.y) * scale;
+    if (drag.mode === 'draw') {
+      b.x = Math.min(p.x, drag.p0.x) * scale; b.y = Math.min(p.y, drag.p0.y) * scale;
+      b.w = Math.abs(p.x - drag.p0.x) * scale; b.h = Math.abs(p.y - drag.p0.y) * scale;
+    } else if (drag.mode === 'move') {
+      b.x = Math.max(0, Math.min(work.width - drag.orig.w, drag.orig.x + dx));
+      b.y = Math.max(0, Math.min(work.height - drag.orig.h, drag.orig.y + dy));
+    } else {
+      b.w = Math.max(8 * scale, Math.min(work.width - drag.orig.x, drag.orig.w + dx));
+      b.h = Math.max(8 * scale, Math.min(work.height - drag.orig.y, drag.orig.h + dy));
+    }
+    render();
+  });
+  function endDrag() {
+    if (!drag) return;
+    var b = boxes[active];
+    if (drag.mode === 'draw' && (b.w < 8 * scale || b.h < 8 * scale)) boxes[active] = null;
+    drag = null; refreshUI(); render();
+  }
+  view.addEventListener('pointerup', endDrag);
+  view.addEventListener('pointercancel', endDrag);
+
+  /* ---------- 가림 범위 슬라이더 ---------- */
+  function bindMid() {
+    var a = $('midStart'), z = $('midEnd');
+    a.addEventListener('input', function () {
+      midStart = Math.min(parseFloat(a.value), midEnd - 8); a.value = midStart;
+      $('midStartOut').textContent = midStart + '%'; render();
+    });
+    z.addEventListener('input', function () {
+      midEnd = Math.max(parseFloat(z.value), midStart + 8); z.value = midEnd;
+      $('midEndOut').textContent = midEnd + '%'; render();
+    });
+  }
+  bindMid();
+
+  /* ---------- 결과 만들기 ---------- */
+  function make() {
+    if (!work) return;
+    var out = document.createElement('canvas'); out.width = work.width; out.height = work.height;
+    var o = out.getContext('2d'); o.drawImage(work, 0, 0); o.fillStyle = '#000';
+    var pad = Math.max(4, work.width * 0.004), done = [], miss = [];
+    var b = boxes.num;
+    if (b) { o.fillRect(b.x + b.w * midStart / 100, b.y - pad, b.w * (midEnd - midStart) / 100, b.h + pad * 2); done.push('카드번호 가운데 8자리'); } else miss.push('카드번호');
+    b = boxes.exp; if (b) { o.fillRect(b.x - pad, b.y - pad, b.w + pad * 2, b.h + pad * 2); done.push('유효기간'); } else miss.push('유효기간');
+    b = boxes.cvc; if (b) { o.fillRect(b.x - pad, b.y - pad, b.w + pad * 2, b.h + pad * 2); done.push('CVC'); } else miss.push('CVC');
+    out.toBlob(function (blob) {
+      if (!blob) { toast('이미지를 만들지 못했습니다. 사진 크기를 줄여 다시 시도하세요.'); return; }
+      if (lastUrl) URL.revokeObjectURL(lastUrl);
+      lastBlob = blob; lastUrl = URL.createObjectURL(blob);
+      $('resImg').src = lastUrl; $('resImg').hidden = false; $('emptyRes').hidden = true;
+      $('saveNote').hidden = false; $('copyBtn').hidden = false;
+      try { var tf = new File([blob], 'x.png', { type: 'image/png' }); $('shareBtn').hidden = !(navigator.canShare && navigator.canShare({ files: [tf] })); } catch (e) { $('shareBtn').hidden = true; }
+      var html = '';
+      done.forEach(function (t) { html += '<li class="ok"><span class="mark">OK</span><span>' + t + ' 가림</span></li>'; });
+      miss.forEach(function (t) { html += '<li class="miss"><span class="mark">--</span><span>' + t + ' 미지정. 이 사진에 보이지 않는 항목이면 그대로 두어도 됩니다.</span></li>'; });
+      if (boxes.num) html += '<li class="ok"><span class="mark">OK</span><span>앞 4자리와 뒤 4자리는 남겨 둠. 결과 사진에서 직접 확인하세요.</span></li>';
+      $('report').innerHTML = html;
+    }, 'image/png');
+  }
+  $('makeBtn').addEventListener('click', make);
+
+  $('shareBtn').addEventListener('click', function () {
+    if (!lastBlob) return;
+    var f = new File([lastBlob], 'card-masked.png', { type: 'image/png' });
+    if (navigator.canShare && navigator.canShare({ files: [f] })) {
+      navigator.share({ files: [f] }).catch(function () {});
+    } else { toast('이 브라우저에서는 공유 저장을 쓸 수 없습니다. 사진을 길게 눌러 저장하세요.'); }
+  });
+  $('copyBtn').addEventListener('click', function () {
+    if (!lastBlob) return;
+    var ok = function () { toast('이미지를 복사했습니다.'); };
+    var no = function () { toast('복사가 안 되는 환경입니다. 이미지를 길게 누르거나 우클릭해서 저장하세요.'); };
+    try {
+      if (navigator.clipboard && window.ClipboardItem) navigator.clipboard.write([new ClipboardItem({ 'image/png': lastBlob })]).then(ok, no); else no();
+    } catch (e) { no(); }
+  });
+
+
+  /* ============ 자동 인식 ============ */
+  /*DETECT_START*/
+  function wordsFromData(data) {
+    var ws = [];
+    if (data.words && data.words.length) ws = data.words;
+    else if (data.blocks) {
+      data.blocks.forEach(function (b) { (b.paragraphs || []).forEach(function (p) { (p.lines || []).forEach(function (l) { (l.words || []).forEach(function (w) { ws.push(w); }); }); }); });
+    }
+    return ws.filter(function (w) { return w && w.text && String(w.text).trim() && w.bbox; }).map(function (w) {
+      return { t: String(w.text).trim(), c: w.confidence || 0, x0: w.bbox.x0, y0: w.bbox.y0, x1: w.bbox.x1, y1: w.bbox.y1 };
+    });
+  }
+  function groupLines(ws) {
+    ws = ws.slice().sort(function (a, b) { return (a.y0 + a.y1) - (b.y0 + b.y1); });
+    var lines = [];
+    ws.forEach(function (w) {
+      var cy = (w.y0 + w.y1) / 2, h = Math.max(1, w.y1 - w.y0), L = null;
+      for (var i = lines.length - 1; i >= 0 && i >= lines.length - 5; i--) {
+        if (Math.abs(cy - lines[i].cy) < Math.max(h, lines[i].h) * 0.55) { L = lines[i]; break; }
+      }
+      if (!L) { L = { cy: cy, h: h, ws: [] }; lines.push(L); }
+      L.ws.push(w);
+      L.cy = L.ws.reduce(function (s, q) { return s + (q.y0 + q.y1) / 2; }, 0) / L.ws.length;
+      L.h = Math.max(L.h, h);
+    });
+    lines.forEach(function (l) { l.ws.sort(function (a, b) { return a.x0 - b.x0; }); });
+    return lines;
+  }
+  function charBoxes(w, from, to) { /* 단어 상자를 글자 수로 균등하게 나눠 글자별 x 범위를 추정 */
+    var n = w.t.length, out = [];
+    for (var i = from; i < to; i++) out.push({ ch: w.t[i], x0: w.x0 + (w.x1 - w.x0) * i / n, x1: w.x0 + (w.x1 - w.x0) * (i + 1) / n, y0: w.y0, y1: w.y1 });
+    return out;
+  }
+  function union(cs) {
+    var u = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+    cs.forEach(function (c) { u.x0 = Math.min(u.x0, c.x0); u.y0 = Math.min(u.y0, c.y0); u.x1 = Math.max(u.x1, c.x1); u.y1 = Math.max(u.y1, c.y1); });
+    return u;
+  }
+  function digitsOnly(t) { return /^[0-9\-]+$/.test(t) ? t.replace(/-/g, '') : null; }
+
+  function findNumber(lines) {
+    var best = null;
+    lines.forEach(function (line) {
+      var run = [];
+      function flush() {
+        if (!run.length) return;
+        var win = null;
+        [16, 15, 14, 13, 17, 18, 19].some(function (target) {
+          for (var i = 0; i < run.length; i++) {
+            var sum = 0;
+            for (var j = i; j < run.length; j++) {
+              sum += run[j].d.length;
+              if (sum === target) { win = run.slice(i, j + 1); return true; }
+              if (sum > target) break;
+            }
+          }
+          return false;
+        });
+        if (win) {
+          var n = win.reduce(function (s, r) { return s + r.d.length; }, 0);
+          var conf = win.reduce(function (s, r) { return s + r.w.c; }, 0) / win.length;
+          var score = (n === 16 ? 3 : n === 15 ? 2.5 : 1) * 100 + conf;
+          if (!best || score > best.score) best = { score: score, win: win, n: n };
+        }
+        run = [];
+      }
+      line.ws.forEach(function (w) {
+        var d = digitsOnly(w.t);
+        if (d && d.length) run.push({ w: w, d: d }); else flush();
+      });
+      flush();
+    });
+    if (!best) return null;
+    var digits = [];
+    best.win.forEach(function (r) {
+      var cs = charBoxes(r.w, 0, r.w.t.length).filter(function (c) { return /[0-9]/.test(c.ch); });
+      digits = digits.concat(cs);
+    });
+    var n = digits.length;
+    if (n < 13) return null;
+    var s = 4, e = n - 5; /* 가릴 글자: 인덱스 s..e */
+    var all = union(digits);
+    var left = (digits[s - 1].x1 + digits[s].x0) / 2 + (digits[s].x0 - digits[s - 1].x1) * 0.1;
+    var right = (digits[e].x1 + digits[e + 1].x0) / 2 - (digits[e + 1].x0 - digits[e].x1) * 0.1;
+    var span = all.x1 - all.x0;
+    return {
+      box: { x: all.x0, y: all.y0, w: span, h: all.y1 - all.y0 },
+      startPct: (left - all.x0) / span * 100, endPct: (right - all.x0) / span * 100,
+      n: n, words: best.win.map(function (r) { return r.w; })
+    };
+  }
+  function curYY() { return new Date().getFullYear() % 100; }
+  function findExpiry(lines, skip) {
+    var re = /(0[1-9]|1[0-2])\s?[\/\-.]\s?((?:20)?\d{2})(?!\d)/g, found = null;
+    lines.forEach(function (line) {
+      var ws = line.ws.filter(function (w) { return skip.indexOf(w) < 0; });
+      var text = '', map = [];
+      ws.forEach(function (w, k) {
+        if (k > 0) { text += ' '; map.push(null); }
+        charBoxes(w, 0, w.t.length).forEach(function (c) { text += c.ch; map.push(c); });
+      });
+      var m;
+      re.lastIndex = 0;
+      while ((m = re.exec(text))) {
+        var yy = parseInt(m[2].slice(-2), 10), cur = curYY();
+        if (yy < cur - 3 || yy > cur + 12) continue;
+        if (m.index > 0 && /\d/.test(text[m.index - 1])) continue;
+        var cs = map.slice(m.index, m.index + m[0].length).filter(Boolean);
+        if (!cs.length) continue;
+        var u = union(cs), conf = ws.reduce(function (s, q) { return s + q.c; }, 0) / ws.length;
+        if (!found || conf > found.conf) found = { conf: conf, box: { x: u.x0, y: u.y0, w: u.x1 - u.x0, h: u.y1 - u.y0 }, words: ws };
+      }
+    });
+    return found;
+  }
+  function findCvc(lines, skip, len) {
+    var best = null;
+    lines.forEach(function (line) {
+      line.ws.forEach(function (w, i) {
+        if (skip.indexOf(w) >= 0) return;
+        if (!new RegExp('^\\d{' + len + '}$').test(w.t)) return;
+        var prev = i > 0 ? line.ws[i - 1] : null;
+        var pri = prev && /^\d{4}$/.test(prev.t) ? 2 : 1;
+        var score = pri * 1000 + w.c;
+        if (!best || score > best.score) best = { score: score, box: { x: w.x0, y: w.y0, w: w.x1 - w.x0, h: w.y1 - w.y0 } };
+      });
+    });
+    return best;
+  }
+  function detect(words) {
+    var lines = groupLines(words), res = {};
+    var num = findNumber(lines);
+    var skip = num ? num.words : [];
+    var exp = findExpiry(lines, skip);
+    if (exp) skip = skip.concat(exp.words.filter(function (w) { return /[\/\-.]/.test(w.t); }));
+    var cvc = findCvc(lines, skip, num && num.n === 15 ? 4 : 3);
+    if (num) res.num = num;
+    if (exp) res.exp = exp;
+    if (cvc) res.cvc = cvc;
+    return res;
+  }
+  /*DETECT_END*/
+
+  /* ---------- 이미지 전처리 (OCR 정확도용) ---------- */
+  function prep(canvas, mode) {
+    var w = canvas.width, h = canvas.height, c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    var x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(canvas, 0, 0);
+    var id = x.getImageData(0, 0, w, h), d = id.data, n = w * h, g = new Uint8Array(n), hist = new Uint32Array(256), i, p;
+    for (i = 0, p = 0; i < n; i++, p += 4) { var v = (d[p] * 299 + d[p + 1] * 587 + d[p + 2] * 114) / 1000 | 0; g[i] = v; hist[v]++; }
+    var lo, hi, acc = 0;
+    for (lo = 0; lo < 256; lo++) { acc += hist[lo]; if (acc > n * 0.02) break; }
+    acc = 0;
+    for (hi = 255; hi >= 0; hi--) { acc += hist[hi]; if (acc > n * 0.02) break; }
+    if (hi - lo < 20) { lo = 0; hi = 255; }
+    var k = 255 / (hi - lo);
+    for (i = 0; i < n; i++) { var q = (g[i] - lo) * k; g[i] = q < 0 ? 0 : q > 255 ? 255 : q; }
+    var out = new Uint8Array(n);
+    if (mode === 'gray' || mode === 'invert') {
+      for (i = 0; i < n; i++) out[i] = mode === 'invert' ? 255 - g[i] : g[i];
+    } else {
+      var W = w + 1, I = new Uint32Array(W * (h + 1)), yy, xx, row;
+      for (yy = 0; yy < h; yy++) {
+        row = 0;
+        for (xx = 0; xx < w; xx++) { row += g[yy * w + xx]; I[(yy + 1) * W + xx + 1] = I[yy * W + xx + 1] + row; }
+      }
+      var r = Math.max(15, (Math.min(w, h) / 16) | 0);
+      for (yy = 0; yy < h; yy++) {
+        var y0 = Math.max(0, yy - r), y1 = Math.min(h, yy + r + 1);
+        for (xx = 0; xx < w; xx++) {
+          var x0 = Math.max(0, xx - r), x1 = Math.min(w, xx + r + 1);
+          var sum = I[y1 * W + x1] - I[y0 * W + x1] - I[y1 * W + x0] + I[y0 * W + x0];
+          var mean = sum / ((x1 - x0) * (y1 - y0)), val = g[yy * w + xx];
+          var ink = mode === 'thresh' ? val < mean * 0.88 : val > mean * 1.12 + 4;
+          out[yy * w + xx] = ink ? 0 : 255;
+        }
+      }
+    }
+    for (i = 0, p = 0; i < n; i++, p += 4) { d[p] = d[p + 1] = d[p + 2] = out[i]; d[p + 3] = 255; }
+    x.putImageData(id, 0, 0);
+    return c;
+  }
+
+  /* ---------- OCR 실행 ---------- */
+  var worker = null, workerP = null, job = 0, busy = false, rerun = false;
+  function setMsg(text, cls) { var m = $('autoMsg'); m.textContent = text; m.className = 'msg' + (cls ? ' ' + cls : ''); }
+  function setBar(p) { var b = $('autoBar'); b.hidden = p == null; $('autoFill').style.width = (p == null ? 0 : Math.round(p * 100)) + '%'; }
+  function getWorker() {
+    if (worker) return Promise.resolve(worker);
+    if (workerP) return workerP;
+    if (!window.Tesseract) return Promise.reject(new Error('no-lib'));
+    workerP = Tesseract.createWorker('eng', 1, {
+      logger: function (m) {
+        if (m && m.status && /loading|initializ/.test(m.status) && typeof m.progress === 'number') {
+          setMsg('인식 엔진 내려받는 중… 처음 한 번만 걸립니다.', 'busy'); setBar(m.progress);
+        }
+      }
+    }).then(function (w) {
+      return w.setParameters({
+        tessedit_char_whitelist: '0123456789/-. ',
+        tessedit_pageseg_mode: '11',
+        preserve_interword_spaces: '1'
+      }).then(function () { worker = w; return w; });
+    });
+    workerP.catch(function () { workerP = null; });
+    return workerP;
+  }
+  function applyFound(found) {
+    var msgs = [];
+    if (found.num) {
+      var b = found.num.box;
+      boxes.num = { x: b.x, y: b.y, w: b.w, h: b.h };
+      midStart = Math.max(5, Math.min(45, Math.round(found.num.startPct * 2) / 2));
+      midEnd = Math.max(55, Math.min(95, Math.round(found.num.endPct * 2) / 2));
+      $('midStart').value = midStart; $('midEnd').value = midEnd;
+      $('midStartOut').textContent = midStart + '%'; $('midEndOut').textContent = midEnd + '%';
+      msgs.push('카드번호 ' + found.num.n + '자리');
+    }
+    if (found.exp) { var e = found.exp.box; boxes.exp = { x: e.x, y: e.y, w: e.w, h: e.h }; msgs.push('유효기간'); }
+    if (found.cvc) { var c = found.cvc.box; boxes.cvc = { x: c.x, y: c.y, w: c.w, h: c.h }; msgs.push('CVC'); }
+    return msgs;
+  }
+  function autoDetect() {
+    if (!work) return Promise.resolve();
+    if (busy) { rerun = true; return Promise.resolve(); }
+    busy = true; rerun = false;
+    var my = ++job;
+    $('autoBtn').disabled = true;
+    setMsg('인식 엔진 준비 중…', 'busy'); setBar(null);
+    return getWorker().then(function (w) {
+      var modes = ['gray', 'invert', 'thresh', 'threshInv'], found = {}, snapshot = work;
+      var chain = Promise.resolve();
+      modes.forEach(function (mode, idx) {
+        chain = chain.then(function () {
+          if (found.cvc || (found.num && found.exp) || my !== job || snapshot !== work) return;
+          setMsg('글자를 찾는 중… (' + (idx + 1) + '/' + modes.length + ')', 'busy'); setBar((idx + 0.3) / modes.length);
+          return new Promise(function (r) { setTimeout(r, 30); }).then(function () {
+            return w.recognize(prep(snapshot, mode));
+          }).then(function (res) {
+            var r = detect(wordsFromData(res.data));
+            ['num', 'exp', 'cvc'].forEach(function (k) { if (!found[k] && r[k]) found[k] = r[k]; });
+          });
+        });
+      });
+      return chain.then(function () {
+        if (my !== job || snapshot !== work) return;
+        var msgs = applyFound(found);
+        setBar(null); refreshUI(); render();
+        if (msgs.length) setMsg('자동으로 찾음: ' + msgs.join(', ') + '. 검은 칸이 정확한지 확인하세요.', 'ok');
+        else setMsg('자동으로 찾지 못했습니다. 카드를 똑바로 돌리고 ‘자동으로 찾기’를 다시 누르거나, 아래에서 직접 지정하세요.', 'warn');
+      });
+    }).catch(function () {
+      setBar(null);
+      setMsg('인식 엔진을 불러오지 못했습니다. 인터넷 연결을 확인하거나 직접 지정하세요.', 'warn');
+    }).then(function () {
+      busy = false; $('autoBtn').disabled = false;
+      if (rerun) autoDetect();
+    });
+  }
+  $('autoBtn').addEventListener('click', function () {
+    boxes = { num: null, exp: null, cvc: null }; refreshUI(); render(); autoDetect();
+  });
+
+  /* ---------- 예시 카드 (가상의 번호) ---------- */
+  function buildSample() {
+    var p = (document.fonts && document.fonts.load) ? document.fonts.load('600 62px "JetBrains Mono"') : Promise.resolve();
+    return p.catch(function () {}).then(function () {
+      var c = document.createElement('canvas'); c.width = 1000; c.height = 630;
+      var x = c.getContext('2d'), mono = '"JetBrains Mono", ui-monospace, monospace';
+      var g = x.createLinearGradient(0, 0, 1000, 630); g.addColorStop(0, '#1d3a5f'); g.addColorStop(1, '#0f6b6e');
+      x.fillStyle = g; x.fillRect(0, 0, 1000, 630);
+      x.fillStyle = 'rgba(255,255,255,.07)'; x.beginPath(); x.arc(860, 90, 220, 0, Math.PI * 2); x.fill();
+      x.fillStyle = '#d9c27a'; x.fillRect(70, 150, 96, 74);
+      x.fillStyle = 'rgba(0,0,0,.25)'; x.fillRect(70, 186, 96, 2); x.fillRect(116, 150, 2, 74);
+      x.fillStyle = '#fff'; x.textBaseline = 'alphabetic';
+      x.font = '700 30px ' + mono; x.fillText('SAMPLE BANK', 70, 90);
+      x.font = '500 20px ' + mono; x.fillText('예시용 가상 카드', 700, 90);
+      var out = {};
+      x.font = '600 62px ' + mono;
+      var num = '1234 5678 9012 3456', nw = x.measureText(num).width;
+      x.fillText(num, 70, 400);
+      out.num = { x: 70, y: 400 - 62 * 0.74, w: nw, h: 62 * 0.74 };
+      x.font = '500 18px ' + mono; x.fillText('VALID THRU', 70, 462); x.fillText('CVC', 760, 462);
+      x.font = '500 40px ' + mono;
+      var ew = x.measureText('12/29').width, cw = x.measureText('123').width;
+      x.fillText('12/29', 70, 510); x.fillText('123', 760, 510);
+      out.exp = { x: 70, y: 510 - 40 * 0.74, w: ew, h: 40 * 0.74 };
+      out.cvc = { x: 760, y: 510 - 40 * 0.74, w: cw, h: 40 * 0.74 };
+      x.font = '500 28px ' + mono; x.fillText('HONG GILDONG', 70, 586);
+      return { canvas: c, boxes: out };
+    });
+  }
+  function loadSample() {
+    buildSample().then(function (s) {
+      isSample = true; setSource(s.canvas, s.boxes); make();
+      setMsg('가상의 예시 카드입니다. 내 카드는 위에서 촬영하거나 선택하세요.');
+      toast('가상의 예시 카드를 불러왔습니다.');
+    });
+  }
+  $('sampleBtn').addEventListener('click', loadSample);
+
+  var rt;
+  window.addEventListener('resize', function () { clearTimeout(rt); rt = setTimeout(function () { layout(); render(); }, 80); });
+  refreshUI();
+  buildSample().then(function (s) { setSource(s.canvas, s.boxes); make(); });
+})();
+</script>
+</body>
+</html>
