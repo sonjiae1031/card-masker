@@ -126,6 +126,9 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   background: var(--fg); color: var(--bg); padding: 10px 16px; border-radius: 4px; font-size: 14px; max-width: min(92vw, 420px); z-index: 20;
 }
 @media (prefers-reduced-motion: no-preference) { .toast { transition: opacity .2s; } }
+.verify { display: flex; flex-direction: column; gap: 6px; background: var(--stage); border: 1px solid var(--line); border-radius: 6px; padding: 10px; min-width: 0; }
+.verify .vt { margin: 0; font-size: 13px; color: var(--muted); }
+.verify canvas { display: block; max-width: 100%; }
 .auto { display: flex; flex-direction: column; gap: 8px; }
 .auto .msg { margin: 0; font-size: 14px; min-height: 1.6em; }
 .auto .msg.busy { color: var(--accent); }
@@ -146,6 +149,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
     <section class="stagecol" aria-label="사진 작업 영역">
       <div class="stage" id="stage"><canvas id="view" aria-label="카드 사진. 드래그해서 가릴 영역을 지정합니다."></canvas></div>
       <p class="hint" id="hint"></p>
+      <div class="verify" id="verifyWrap" hidden><p class="vt">번호 줄 확대 확인. 검은 칸 밖에 앞 4자리와 뒤 4자리가 온전히 보여야 합니다.</p><canvas id="verify"></canvas></div>
     </section>
 
     <aside class="panel">
@@ -164,7 +168,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
         </div>
         <div class="slider">
           <label for="fine">기울기 보정</label>
-          <input id="fine" type="range" min="-20" max="20" step="0.5" value="0">
+          <input id="fine" type="range" min="-45" max="45" step="0.5" value="0">
           <output id="fineOut" for="fine">0°</output>
         </div>
         <p class="note">돌리거나 기울기를 바꾸면 자동으로 다시 찾습니다. 글자가 가로로 똑바로 읽히게 맞출수록 잘 찾습니다.</p>
@@ -180,12 +184,12 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
         <div id="tools" role="radiogroup" aria-label="지정할 항목"></div>
         <div class="slider">
           <label for="midStart">가림 시작</label>
-          <input id="midStart" type="range" min="5" max="45" step="0.5" value="24">
+          <input id="midStart" type="range" min="3" max="47" step="0.25" step="0.5" value="24">
           <output id="midStartOut" for="midStart">24%</output>
         </div>
         <div class="slider">
           <label for="midEnd">가림 끝</label>
-          <input id="midEnd" type="range" min="55" max="95" step="0.5" value="76">
+          <input id="midEnd" type="range" min="53" max="97" step="0.25" step="0.5" value="76">
           <output id="midEndOut" for="midEnd">76%</output>
         </div>
         <p class="note">자동으로 찾은 영역은 반드시 눈으로 확인하세요. 검은 칸이 앞 4자리나 뒤 4자리에 닿거나, 가운데 8자리가 조금이라도 보이면 슬라이더나 끌기로 고치세요.</p>
@@ -258,6 +262,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 
   /* ---------- 사진 불러오기·회전 ---------- */
   function setSource(canvas, presetBoxes) {
+    var vw = document.getElementById('verifyWrap'); if (vw) vw.hidden = true;
     var max = 2200, s = Math.min(1, max / Math.max(canvas.width, canvas.height));
     src = document.createElement('canvas');
     src.width = Math.round(canvas.width * s); src.height = Math.round(canvas.height * s);
@@ -298,21 +303,23 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 
   function loadFile(file) {
     if (!file) return;
+    var MAXPX = 2400; /* 아이폰 사진은 2400만~4800만 화소라서, 큰 캔버스를 만들지 않고 처음부터 줄여서 그린다 */
+    var fail = function () { toast('이 사진을 열 수 없습니다. 다른 사진을 선택하세요.'); };
     var done = function (drawable, w, h) {
-      var c = document.createElement('canvas'); c.width = w; c.height = h;
-      c.getContext('2d').drawImage(drawable, 0, 0);
+      var k = Math.min(1, MAXPX / Math.max(w, h));
+      var c = document.createElement('canvas'); c.width = Math.max(1, Math.round(w * k)); c.height = Math.max(1, Math.round(h * k));
+      c.getContext('2d').drawImage(drawable, 0, 0, c.width, c.height);
       isSample = false; setSource(c, null);
       autoDetect();
     };
-    if (window.createImageBitmap) {
-      createImageBitmap(file).then(function (bm) { done(bm, bm.width, bm.height); }, fallback);
-    } else { fallback(); }
-    function fallback() {
-      var url = URL.createObjectURL(file), im = new Image();
-      im.onload = function () { done(im, im.naturalWidth, im.naturalHeight); URL.revokeObjectURL(url); };
-      im.onerror = function () { toast('이 사진을 열 수 없습니다. 다른 사진을 선택하세요.'); };
-      im.src = url;
-    }
+    /* <img>는 사진의 회전 정보(EXIF)를 브라우저가 알아서 적용해 준다. 안 되면 createImageBitmap으로 다시 시도 */
+    var url = URL.createObjectURL(file), im = new Image();
+    im.onload = function () { URL.revokeObjectURL(url); done(im, im.naturalWidth, im.naturalHeight); };
+    im.onerror = function () {
+      URL.revokeObjectURL(url);
+      if (window.createImageBitmap) createImageBitmap(file).then(function (bm) { done(bm, bm.width, bm.height); }, fail); else fail();
+    };
+    im.src = url;
   }
   ['fileCam', 'fileAlbum'].forEach(function (id) {
     $(id).addEventListener('change', function (e) { loadFile(e.target.files[0]); e.target.value = ''; });
@@ -340,6 +347,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   }
   function render() {
     if (!work) return;
+    if (typeof drawVerify === "function") drawVerify();
     vctx.clearRect(0, 0, cssW, cssH);
     vctx.drawImage(work, 0, 0, cssW, cssH);
     ['num', 'exp', 'cvc'].forEach(function (k) {
@@ -348,15 +356,15 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
       vctx.fillStyle = '#000';
       if (k === 'num') {
         var mx = d.x + d.w * midStart / 100, mw = d.w * (midEnd - midStart) / 100;
-        vctx.fillRect(mx, d.y - 2, mw, d.h + 4);
+        var pv = Math.max(2, d.h * 0.2); vctx.fillRect(mx, d.y - pv, mw, d.h + pv * 2);
         vctx.setLineDash([5, 4]); vctx.lineWidth = 2; vctx.strokeStyle = '#1F4FD8';
         vctx.strokeRect(d.x, d.y, d.w, d.h); vctx.setLineDash([]);
         vctx.fillStyle = 'rgba(255,255,255,.9)';
         vctx.fillRect(d.x + d.w * midStart / 100 - 1, d.y - 6, 2, 6);
         vctx.fillRect(d.x + d.w * midEnd / 100 - 1, d.y - 6, 2, 6);
       } else {
-        vctx.fillRect(d.x - 2, d.y - 2, d.w + 4, d.h + 4);
-        vctx.lineWidth = 2; vctx.strokeStyle = '#1F4FD8'; vctx.strokeRect(d.x - 2, d.y - 2, d.w + 4, d.h + 4);
+        var eh = Math.max(2, d.h * 0.45), ev = Math.max(2, d.h * 0.25); vctx.fillRect(d.x - eh, d.y - ev, d.w + eh * 2, d.h + ev * 2);
+        vctx.lineWidth = 2; vctx.strokeStyle = '#1F4FD8'; vctx.strokeRect(d.x - eh, d.y - ev, d.w + eh * 2, d.h + ev * 2);
       }
       tag(LABEL[k], d.x, d.y);
       if (k === active) {
@@ -432,9 +440,9 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
     var o = out.getContext('2d'); o.drawImage(work, 0, 0); o.fillStyle = '#000';
     var pad = Math.max(4, work.width * 0.004), done = [], miss = [];
     var b = boxes.num;
-    if (b) { o.fillRect(b.x + b.w * midStart / 100, b.y - pad, b.w * (midEnd - midStart) / 100, b.h + pad * 2); done.push('카드번호 가운데 8자리'); } else miss.push('카드번호');
-    b = boxes.exp; if (b) { o.fillRect(b.x - pad, b.y - pad, b.w + pad * 2, b.h + pad * 2); done.push('유효기간'); } else miss.push('유효기간');
-    b = boxes.cvc; if (b) { o.fillRect(b.x - pad, b.y - pad, b.w + pad * 2, b.h + pad * 2); done.push('CVC'); } else miss.push('CVC');
+    if (b) { var pv = Math.max(pad, b.h * 0.2); o.fillRect(b.x + b.w * midStart / 100, b.y - pv, b.w * (midEnd - midStart) / 100, b.h + pv * 2); done.push('카드번호 가운데 8자리'); } else miss.push('카드번호');
+    b = boxes.exp; if (b) { var ph = Math.max(pad, b.h * 0.45), pv2 = Math.max(pad, b.h * 0.25); o.fillRect(b.x - ph, b.y - pv2, b.w + ph * 2, b.h + pv2 * 2); done.push('유효기간'); } else miss.push('유효기간');
+    b = boxes.cvc; if (b) { var ph3 = Math.max(pad, b.h * 0.45), pv3 = Math.max(pad, b.h * 0.25); o.fillRect(b.x - ph3, b.y - pv3, b.w + ph3 * 2, b.h + pv3 * 2); done.push('CVC'); } else miss.push('CVC');
     out.toBlob(function (blob) {
       if (!blob) { toast('이미지를 만들지 못했습니다. 사진 크기를 줄여 다시 시도하세요.'); return; }
       if (lastUrl) URL.revokeObjectURL(lastUrl);
@@ -468,191 +476,412 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   });
 
 
-  /* ============ 자동 인식 ============ */
-  /*DETECT_START*/
-  function wordsFromData(data) {
-    var ws = [];
-    if (data.words && data.words.length) ws = data.words;
-    else if (data.blocks) {
-      data.blocks.forEach(function (b) { (b.paragraphs || []).forEach(function (p) { (p.lines || []).forEach(function (l) { (l.words || []).forEach(function (w) { ws.push(w); }); }); }); });
+  /* ============ 자동 인식 (글자 덩어리 분석 + 필요할 때만 OCR) ============ */
+  var AN_MAX = 1600;
+  var VARIANTS = ['dark', 'light', 'edge', 'chroma', 'dark2', 'light2', 'chroma2'];
+
+  /* ---------- 픽셀 도구 ---------- */
+  function grayOf(canvas) {
+    var w = canvas.width, h = canvas.height;
+    var d = canvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, w, h).data;
+    var g = new Uint8Array(w * h);
+    for (var i = 0, p = 0; i < g.length; i++, p += 4) g[i] = (d[p] * 77 + d[p + 1] * 150 + d[p + 2] * 29) >> 8;
+    return { g: g, w: w, h: h, rgba: d };
+  }
+  function integral(a, w, h) {
+    var W = w + 1, I = new Float64Array(W * (h + 1));
+    for (var y = 0; y < h; y++) {
+      var row = 0;
+      for (var x = 0; x < w; x++) { row += a[y * w + x]; I[(y + 1) * W + x + 1] = I[y * W + x + 1] + row; }
     }
-    return ws.filter(function (w) { return w && w.text && String(w.text).trim() && w.bbox; }).map(function (w) {
-      return { t: String(w.text).trim(), c: w.confidence || 0, x0: w.bbox.x0, y0: w.bbox.y0, x1: w.bbox.x1, y1: w.bbox.y1 };
-    });
+    return I;
   }
-  function groupLines(ws) {
-    ws = ws.slice().sort(function (a, b) { return (a.y0 + a.y1) - (b.y0 + b.y1); });
-    var lines = [];
-    ws.forEach(function (w) {
-      var cy = (w.y0 + w.y1) / 2, h = Math.max(1, w.y1 - w.y0), L = null;
-      for (var i = lines.length - 1; i >= 0 && i >= lines.length - 5; i--) {
-        if (Math.abs(cy - lines[i].cy) < Math.max(h, lines[i].h) * 0.55) { L = lines[i]; break; }
+  function boxMean(I, w, h, r) {
+    var W = w + 1, m = new Float32Array(w * h);
+    for (var y = 0; y < h; y++) {
+      var y0 = Math.max(0, y - r), y1 = Math.min(h, y + r + 1);
+      for (var x = 0; x < w; x++) {
+        var x0 = Math.max(0, x - r), x1 = Math.min(w, x + r + 1);
+        m[y * w + x] = (I[y1 * W + x1] - I[y0 * W + x1] - I[y1 * W + x0] + I[y0 * W + x0]) / ((x1 - x0) * (y1 - y0));
       }
-      if (!L) { L = { cy: cy, h: h, ws: [] }; lines.push(L); }
-      L.ws.push(w);
-      L.cy = L.ws.reduce(function (s, q) { return s + (q.y0 + q.y1) / 2; }, 0) / L.ws.length;
-      L.h = Math.max(L.h, h);
-    });
-    lines.forEach(function (l) { l.ws.sort(function (a, b) { return a.x0 - b.x0; }); });
-    return lines;
+    }
+    return m;
   }
-  function charBoxes(w, from, to) { /* 단어 상자를 글자 수로 균등하게 나눠 글자별 x 범위를 추정 */
-    var n = w.t.length, out = [];
-    for (var i = from; i < to; i++) out.push({ ch: w.t[i], x0: w.x0 + (w.x1 - w.x0) * i / n, x1: w.x0 + (w.x1 - w.x0) * (i + 1) / n, y0: w.y0, y1: w.y1 });
+  function dilate(ink, w, h) {
+    var o = new Uint8Array(w * h);
+    for (var y = 1; y < h - 1; y++) for (var x = 1; x < w - 1; x++) {
+      var i = y * w + x;
+      if (ink[i] || ink[i - 1] || ink[i + 1] || ink[i - w] || ink[i + w] || ink[i - w - 1] || ink[i - w + 1] || ink[i + w - 1] || ink[i + w + 1]) o[i] = 1;
+    }
+    return o;
+  }
+  function makeInk(gr, variant, cache) {
+    var w = gr.w, h = gr.h, g = gr.g, ink = new Uint8Array(w * h), i;
+    var r = Math.max(10, Math.round(Math.min(w, h) / 40));
+    if (variant === 'edge') {
+      if (!cache.edge) {
+        var bl = boxMean(integral(g, w, h), w, h, 1), mag = new Float32Array(w * h);
+        for (var y = 1; y < h - 1; y++) for (var x = 1; x < w - 1; x++) {
+          var k = y * w + x;
+          var gx = bl[k - w + 1] + 2 * bl[k + 1] + bl[k + w + 1] - bl[k - w - 1] - 2 * bl[k - 1] - bl[k + w - 1];
+          var gy = bl[k + w - 1] + 2 * bl[k + w] + bl[k + w + 1] - bl[k - w - 1] - 2 * bl[k - w] - bl[k - w + 1];
+          mag[k] = Math.abs(gx) + Math.abs(gy);
+        }
+        cache.edge = { mag: mag, mean: boxMean(integral(mag, w, h), w, h, r * 2) };
+      }
+      var E = cache.edge;
+      for (i = 0; i < ink.length; i++) ink[i] = E.mag[i] > E.mean[i] * 2.2 + 14 ? 1 : 0;
+      return dilate(ink, w, h);
+    }
+    if (variant === 'chroma' || variant === 'chroma2') {
+      if (!cache.cm) {
+        cache.cm = [0, 1, 2].map(function (ch) {
+          var a = new Uint8Array(w * h);
+          for (var q = 0, pp = ch; q < a.length; q++, pp += 4) a[q] = gr.rgba[pp];
+          return boxMean(integral(a, w, h), w, h, r);
+        });
+      }
+      var T = variant === 'chroma' ? 30 : 18, T2 = T * T, cm = cache.cm, rg = gr.rgba;
+      for (i = 0; i < ink.length; i++) {
+        var dr = rg[i * 4] - cm[0][i], dg = rg[i * 4 + 1] - cm[1][i], db = rg[i * 4 + 2] - cm[2][i];
+        ink[i] = dr * dr + dg * dg + db * db > T2 ? 1 : 0;
+      }
+      return ink;
+    }
+    if (!cache.mean) cache.mean = boxMean(integral(g, w, h), w, h, r);
+    var m = cache.mean, dark = variant === 'dark' || variant === 'dark2' || variant === 'dark4', soft = variant === 'dark2' || variant === 'light2', strict = variant === 'dark4' || variant === 'light4';
+    var kk = strict ? 0.3 : soft ? 0.05 : 0.11, off = strict ? 12 : soft ? 3 : 7; /* strict: 줄무늬보다 훨씬 진한 획만 남김 */
+    for (i = 0; i < ink.length; i++) ink[i] = dark ? (g[i] < m[i] * (1 - kk) - off ? 1 : 0) : (g[i] > m[i] * (1 + kk) + off ? 1 : 0);
+    return ink;
+  }
+  function labelCC(ink, w, h, hmin, hmax) {
+    var lab = new Int32Array(w * h), par = new Int32Array((w * h >> 1) + 2), nl = 0, x, y, i;
+    function find(a) { while (par[a] !== a) { par[a] = par[par[a]]; a = par[a]; } return a; }
+    for (y = 0; y < h; y++) for (x = 0; x < w; x++) {
+      i = y * w + x;
+      if (!ink[i]) continue;
+      var a = x > 0 ? lab[i - 1] : 0, b = (y > 0 && x > 0) ? lab[i - w - 1] : 0, c = y > 0 ? lab[i - w] : 0, d = (y > 0 && x < w - 1) ? lab[i - w + 1] : 0;
+      var mn = 0;
+      if (a && (!mn || a < mn)) mn = a;
+      if (b && (!mn || b < mn)) mn = b;
+      if (c && (!mn || c < mn)) mn = c;
+      if (d && (!mn || d < mn)) mn = d;
+      if (!mn) { nl++; par[nl] = nl; lab[i] = nl; continue; }
+      lab[i] = mn;
+      if (a && a !== mn) par[find(a)] = find(mn);
+      if (b && b !== mn) par[find(b)] = find(mn);
+      if (c && c !== mn) par[find(c)] = find(mn);
+      if (d && d !== mn) par[find(d)] = find(mn);
+    }
+    var x0 = new Int32Array(nl + 1).fill(1 << 30), y0 = new Int32Array(nl + 1).fill(1 << 30), x1 = new Int32Array(nl + 1).fill(-1), y1 = new Int32Array(nl + 1).fill(-1), cnt = new Int32Array(nl + 1);
+    for (y = 0; y < h; y++) for (x = 0; x < w; x++) {
+      i = y * w + x;
+      if (!lab[i]) continue;
+      var r = find(lab[i]);
+      if (x < x0[r]) x0[r] = x; if (x > x1[r]) x1[r] = x; if (y < y0[r]) y0[r] = y; if (y > y1[r]) y1[r] = y; cnt[r]++;
+    }
+    var out = [];
+    for (var k = 1; k <= nl; k++) {
+      if (par[k] !== k || x1[k] < 0) continue;
+      var cw = x1[k] - x0[k] + 1, ch = y1[k] - y0[k] + 1;
+      if (ch < hmin || ch > hmax || cw < 2 || cw > ch * 1.5 + 4 || cnt[k] < 0.17 * cw * ch) continue;
+      out.push({ x0: x0[k], y0: y0[k], x1: x1[k] + 1, y1: y1[k] + 1, w: cw, h: ch, cx: (x0[k] + x1[k] + 1) / 2, cy: (y0[k] + y1[k] + 1) / 2 });
+    }
     return out;
   }
-  function union(cs) {
-    var u = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
-    cs.forEach(function (c) { u.x0 = Math.min(u.x0, c.x0); u.y0 = Math.min(u.y0, c.y0); u.x1 = Math.max(u.x1, c.x1); u.y1 = Math.max(u.y1, c.y1); });
-    return u;
-  }
-  function digitsOnly(t) { return /^[0-9\-]+$/.test(t) ? t.replace(/-/g, '') : null; }
+  function median(a) { if (!a.length) return 0; var s = a.slice().sort(function (p, q) { return p - q; }); return s[s.length >> 1]; }
 
-  function findNumber(lines) {
-    var best = null;
-    lines.forEach(function (line) {
-      var run = [];
-      function flush() {
-        if (!run.length) return;
-        var win = null;
-        [16, 15, 14, 13, 17, 18, 19].some(function (target) {
-          for (var i = 0; i < run.length; i++) {
-            var sum = 0;
-            for (var j = i; j < run.length; j++) {
-              sum += run[j].d.length;
-              if (sum === target) { win = run.slice(i, j + 1); return true; }
-              if (sum > target) break;
-            }
-          }
-          return false;
-        });
-        if (win) {
-          var n = win.reduce(function (s, r) { return s + r.d.length; }, 0);
-          var conf = win.reduce(function (s, r) { return s + r.w.c; }, 0) / win.length;
-          var score = (n === 16 ? 3 : n === 15 ? 2.5 : 1) * 100 + conf;
-          if (!best || score > best.score) best = { score: score, win: win, n: n };
-        }
-        run = [];
+  /* ---------- 글자 줄(chain) 찾기 ---------- */
+  function buildChains(cs) {
+    cs = cs.slice().sort(function (a, b) { return a.cx - b.cx; });
+    var n = cs.length, par = new Int32Array(n), i, j;
+    for (i = 0; i < n; i++) par[i] = i;
+    function find(a) { while (par[a] !== a) { par[a] = par[par[a]]; a = par[a]; } return a; }
+    for (i = 0; i < n; i++) {
+      var ci = cs[i], best = -1, bd = 1e9;
+      for (j = i + 1; j < n && cs[j].cx - ci.cx <= 4.6 * ci.h; j++) {
+        var cj = cs[j], dx = cj.cx - ci.cx;
+        if (dx < 0.3 * ci.h) continue;
+        var hr = cj.h / ci.h;
+        if (hr < 0.72 || hr > 1.39) continue;
+        if (Math.abs(cj.cy - ci.cy) > 0.3 * ci.h + 0.3 * dx) continue;
+        if (dx < bd) { bd = dx; best = j; }
       }
-      line.ws.forEach(function (w) {
-        var d = digitsOnly(w.t);
-        if (d && d.length) run.push({ w: w, d: d }); else flush();
-      });
-      flush();
-    });
-    if (!best) return null;
-    var digits = [];
-    best.win.forEach(function (r) {
-      var cs = charBoxes(r.w, 0, r.w.t.length).filter(function (c) { return /[0-9]/.test(c.ch); });
-      digits = digits.concat(cs);
-    });
-    var n = digits.length;
-    if (n < 13) return null;
-    var s = 4, e = n - 5; /* 가릴 글자: 인덱스 s..e */
-    var all = union(digits);
-    var left = (digits[s - 1].x1 + digits[s].x0) / 2 + (digits[s].x0 - digits[s - 1].x1) * 0.1;
-    var right = (digits[e].x1 + digits[e + 1].x0) / 2 - (digits[e + 1].x0 - digits[e].x1) * 0.1;
-    var span = all.x1 - all.x0;
-    return {
-      box: { x: all.x0, y: all.y0, w: span, h: all.y1 - all.y0 },
-      startPct: (left - all.x0) / span * 100, endPct: (right - all.x0) / span * 100,
-      n: n, words: best.win.map(function (r) { return r.w; })
-    };
+      if (best >= 0) par[find(i)] = find(best);
+    }
+    var groups = {};
+    for (i = 0; i < n; i++) { var r = find(i); (groups[r] = groups[r] || []).push(cs[i]); }
+    var out = [];
+    for (var k in groups) if (groups[k].length >= 3) out.push(groups[k]);
+    return out;
   }
-  function curYY() { return new Date().getFullYear() % 100; }
-  function findExpiry(lines, skip) {
-    var re = /(0[1-9]|1[0-2])\s?[\/\-.]\s?((?:20)?\d{2})(?!\d)/g, found = null;
-    lines.forEach(function (line) {
-      var ws = line.ws.filter(function (w) { return skip.indexOf(w) < 0; });
-      var text = '', map = [];
-      ws.forEach(function (w, k) {
-        if (k > 0) { text += ' '; map.push(null); }
-        charBoxes(w, 0, w.t.length).forEach(function (c) { text += c.ch; map.push(c); });
-      });
-      var m;
-      re.lastIndex = 0;
-      while ((m = re.exec(text))) {
-        var yy = parseInt(m[2].slice(-2), 10), cur = curYY();
-        if (yy < cur - 3 || yy > cur + 12) continue;
-        if (m.index > 0 && /\d/.test(text[m.index - 1])) continue;
-        var cs = map.slice(m.index, m.index + m[0].length).filter(Boolean);
-        if (!cs.length) continue;
-        var u = union(cs), conf = ws.reduce(function (s, q) { return s + q.c; }, 0) / ws.length;
-        if (!found || conf > found.conf) found = { conf: conf, box: { x: u.x0, y: u.y0, w: u.x1 - u.x0, h: u.y1 - u.y0 }, words: ws };
-      }
-    });
-    return found;
+  function fitLine(c) {
+    var n = c.length, sx = 0, sy = 0, sxx = 0, sxy = 0, i;
+    for (i = 0; i < n; i++) { sx += c[i].cx; sy += c[i].cy; sxx += c[i].cx * c[i].cx; sxy += c[i].cx * c[i].cy; }
+    var den = n * sxx - sx * sx, b = Math.abs(den) < 1e-6 ? 0 : (n * sxy - sx * sy) / den;
+    return { b: b, a: (sy - b * sx) / n };
   }
-  function findCvc(lines, skip, len) {
+  function cleanChain(c) {
+    c = c.slice().sort(function (p, q) { return p.cx - q.cx; });
+    for (var it = 0; it < 3 && c.length >= 3; it++) {
+      var f = fitLine(c), mh = median(c.map(function (q) { return q.h; }));
+      var keep = c.filter(function (q) { return Math.abs(q.cy - (f.a + f.b * q.cx)) <= 0.38 * mh && q.h > 0.68 * mh && q.h < 1.45 * mh; });
+      if (keep.length === c.length) break;
+      c = keep;
+    }
+    return c;
+  }
+  function gapsOf(c) { var g = []; for (var i = 0; i + 1 < c.length; i++) g.push(c[i + 1].x0 - c[i].x1); return g; }
+  /* 한 줄(window)을 해석한다: 4그룹(4-4-4-4), 3그룹(4-6-5), 간격 없는 연속 16자리 */
+  function interpret(w, mh) {
+    var n = w.length, g = gapsOf(w), idx = [], i;
+    for (i = 0; i < g.length; i++) idx.push(i);
+    idx.sort(function (p, q) { return g[q] - g[p]; });
     var best = null;
-    lines.forEach(function (line) {
-      line.ws.forEach(function (w, i) {
-        if (skip.indexOf(w) >= 0) return;
-        if (!new RegExp('^\\d{' + len + '}$').test(w.t)) return;
-        var prev = i > 0 ? line.ws[i - 1] : null;
-        var pri = prev && /^\d{4}$/.test(prev.t) ? 2 : 1;
-        var score = pri * 1000 + w.c;
-        if (!best || score > best.score) best = { score: score, box: { x: w.x0, y: w.y0, w: w.x1 - w.x0, h: w.y1 - w.y0 } };
-      });
+    function put(r) { if (!best || r.score > best.score) best = r; }
+    if (n >= 12 && n <= 19) {
+      var t = idx.slice(0, 3).sort(function (p, q) { return p - q; }), g3 = g[idx[2]], g4 = idx.length > 3 ? g[idx[3]] : 0;
+      var sep = (g3 - g4) / mh, sizes = [t[0] + 1, t[1] - t[0], t[2] - t[1], n - 1 - t[2]], dev = 0;
+      sizes.forEach(function (z) { dev += Math.abs(z - 4); });
+      if (sizes.every(function (z) { return z >= 2 && z <= 6; }) && sep > 0.1) {
+        put({ kind: 'g4', score: 1.0 + Math.min(0.8, sep * 1.5) - 0.1 * dev - 0.05 * Math.max(0, n - 16), sep: sep, dev: dev, n: n, i1: t[0], i2: t[2], win: w });
+      }
+    }
+    if (n >= 13 && n <= 16) {
+      var u = idx.slice(0, 2).sort(function (p, q) { return p - q; }), sep2 = (g[idx[1]] - (g[idx[2]] || 0)) / mh;
+      var sz = [u[0] + 1, u[1] - u[0], n - 1 - u[1]];
+      if (sep2 > 0.1 && sz[0] === 4 && sz[1] === 6 && (sz[2] === 5 || sz[2] === 4)) {
+        put({ kind: 'g3', score: 0.95 + Math.min(0.8, sep2 * 1.5) - 0.1 * (Math.abs(n - 15) + Math.abs(sz[0] - 4) + Math.abs(sz[1] - 6) + Math.abs(sz[2] - 5)), sep: sep2, dev: Math.abs(n - 15), n: n, i1: u[0], i2: n - 5, win: w });
+      }
+    }
+    if (n === 16) put({ kind: 'cont', score: 0.7, sep: 0, dev: 0, n: n, i1: 3, i2: 11, win: w });
+    return best;
+  }
+  function evalChain(c) {
+    c = cleanChain(c);
+    var n = c.length;
+    if (n < 12) return null;
+    var mh = median(c.map(function (q) { return q.h; })), wins = [], best = null, s, L;
+    if (n <= 19) wins.push(c);
+    else for (L = 16; L <= 18; L++) for (s = 0; s + L <= n; s++) wins.push(c.slice(s, s + L));
+    wins.forEach(function (w) {
+      var r = interpret(w, median(w.map(function (q) { return q.h; })));
+      if (r) { var hv = 0; w.forEach(function (q) { hv += Math.abs(q.h - mh) / mh; }); r.score -= (hv / w.length) * 1.2; r.mh = mh; if (!best || r.score > best.score) best = r; }
     });
     return best;
   }
-  function detect(words) {
-    var lines = groupLines(words), res = {};
-    var num = findNumber(lines);
-    var skip = num ? num.words : [];
-    var exp = findExpiry(lines, skip);
-    if (exp) skip = skip.concat(exp.words.filter(function (w) { return /[\/\-.]/.test(w.t); }));
-    var cvc = findCvc(lines, skip, num && num.n === 15 ? 4 : 3);
-    if (num) res.num = num;
-    if (exp) res.exp = exp;
-    if (cvc) res.cvc = cvc;
-    return res;
+  function decideCuts(r) {
+    var win = r.win, i1 = r.i1, i2 = r.i2, y0 = 1e9, y1 = -1e9;
+    win.forEach(function (q) { y0 = Math.min(y0, q.y0); y1 = Math.max(y1, q.y1); });
+    return {
+      x0: win[0].x0, x1: win[win.length - 1].x1, y0: y0, y1: y1,
+      cut1: r.cutx ? r.cutx[0] : (win[i1].x1 + win[i1 + 1].x0) / 2, cut2: r.cutx ? r.cutx[1] : (win[i2].x1 + win[i2 + 1].x0) / 2,
+      L: win.length, S: r.sep, kind: r.kind, dev: r.dev
+    };
   }
-  /*DETECT_END*/
 
-  /* ---------- 이미지 전처리 (OCR 정확도용) ---------- */
-  function prep(canvas, mode) {
-    var w = canvas.width, h = canvas.height, c = document.createElement('canvas');
-    c.width = w; c.height = h;
-    var x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(canvas, 0, 0);
-    var id = x.getImageData(0, 0, w, h), d = id.data, n = w * h, g = new Uint8Array(n), hist = new Uint32Array(256), i, p;
-    for (i = 0, p = 0; i < n; i++, p += 4) { var v = (d[p] * 299 + d[p + 1] * 587 + d[p + 2] * 114) / 1000 | 0; g[i] = v; hist[v]++; }
-    var lo, hi, acc = 0;
-    for (lo = 0; lo < 256; lo++) { acc += hist[lo]; if (acc > n * 0.02) break; }
-    acc = 0;
-    for (hi = 255; hi >= 0; hi--) { acc += hist[hi]; if (acc > n * 0.02) break; }
-    if (hi - lo < 20) { lo = 0; hi = 255; }
-    var k = 255 / (hi - lo);
-    for (i = 0; i < n; i++) { var q = (g[i] - lo) * k; g[i] = q < 0 ? 0 : q > 255 ? 255 : q; }
-    var out = new Uint8Array(n);
-    if (mode === 'gray' || mode === 'invert') {
-      for (i = 0; i < n; i++) out[i] = mode === 'invert' ? 255 - g[i] : g[i];
-    } else {
-      var W = w + 1, I = new Uint32Array(W * (h + 1)), yy, xx, row;
-      for (yy = 0; yy < h; yy++) {
-        row = 0;
-        for (xx = 0; xx < w; xx++) { row += g[yy * w + xx]; I[(yy + 1) * W + xx + 1] = I[yy * W + xx + 1] + row; }
-      }
-      var r = Math.max(15, (Math.min(w, h) / 16) | 0);
-      for (yy = 0; yy < h; yy++) {
-        var y0 = Math.max(0, yy - r), y1 = Math.min(h, yy + r + 1);
-        for (xx = 0; xx < w; xx++) {
-          var x0 = Math.max(0, xx - r), x1 = Math.min(w, xx + r + 1);
-          var sum = I[y1 * W + x1] - I[y0 * W + x1] - I[y1 * W + x0] + I[y0 * W + x0];
-          var mean = sum / ((x1 - x0) * (y1 - y0)), val = g[yy * w + xx];
-          var ink = mode === 'thresh' ? val < mean * 0.88 : val > mean * 1.12 + 4;
-          out[yy * w + xx] = ink ? 0 : 255;
+  /* 한 변형(variant)에서 글자 덩어리와 줄 후보를 모두 반환 */
+  function scanVariant(gr, variant, cache) {
+    var ink = makeInk(gr, variant, cache), mx = Math.max(gr.w, gr.h);
+    var cs = labelCC(ink, gr.w, gr.h, Math.max(10, Math.round(mx * 0.008)), Math.round(mx * 0.12));
+    return { comps: cs, chains: buildChains(cs) };
+  }
+  /* 같은 줄 위의 덩어리를 모든 변형에서 모아, 한 변형에서 놓친 글자를 다른 변형으로 채운다 */
+  function gatherBand(scans, seed) {
+    var c = cleanChain(seed), f = fitLine(c), mh = median(c.map(function (q) { return q.h; }));
+    var xmin = c[0].cx - 9 * mh, xmax = c[c.length - 1].cx + 9 * mh, all = [];
+    scans.forEach(function (sc) {
+      sc.comps.forEach(function (q) {
+        if (q.cx < xmin || q.cx > xmax) return;
+        if (q.h < 0.62 * mh || q.h > 1.6 * mh) return;
+        if (Math.abs(q.cy - (f.a + f.b * q.cx)) > 0.42 * mh) return;
+        all.push(q);
+      });
+    });
+    all.sort(function (p, q) { return p.cx - q.cx; });
+    var out = [];
+    all.forEach(function (q) {
+      for (var i = out.length - 1; i >= 0 && q.cx - out[i].cx < 0.8 * mh; i--) {
+        var o = out[i], ix = Math.min(o.x1, q.x1) - Math.max(o.x0, q.x0);
+        if (ix > 0.35 * Math.min(o.w, q.w) || Math.abs(o.cx - q.cx) < 0.3 * mh) {
+          if (Math.abs(q.h - mh) < Math.abs(o.h - mh)) out[i] = q;
+          return;
         }
       }
-    }
-    for (i = 0, p = 0; i < n; i++, p += 4) { d[p] = d[p + 1] = d[p + 2] = out[i]; d[p + 3] = 255; }
-    x.putImageData(id, 0, 0);
-    return c;
+      out.push(q);
+    });
+    return out;
   }
 
-  /* ---------- OCR 실행 ---------- */
-  var worker = null, workerP = null, job = 0, busy = false, rerun = false;
+  /* ---------- 일부 숫자를 놓쳐도 번호 줄의 규칙적인 배열(4-4-4-4 또는 4-6-5)로 위치를 복원 ---------- */
+  function splitWide(c) { /* 맞닿아 한 덩어리가 된 숫자 2~3개를 나눈다 */
+    var mw = median(c.map(function (q) { return q.w; })), out = [];
+    c.forEach(function (q) {
+      var k = Math.round(q.w / mw);
+      if (q.w > 1.55 * mw && k >= 2 && k <= 3) {
+        for (var i = 0; i < k; i++) { var x0 = q.x0 + q.w * i / k, x1 = q.x0 + q.w * (i + 1) / k; out.push({ x0: x0, x1: x1, y0: q.y0, y1: q.y1, w: x1 - x0, h: q.h, cx: (x0 + x1) / 2, cy: q.cy }); }
+      } else out.push(q);
+    });
+    return out;
+  }
+  var LAT_TPL = [
+    { n: 16, grp: function (t) { return t >> 2; }, i1: 3, i2: 11, ng: 4 },
+    { n: 15, grp: function (t) { return t < 4 ? 0 : t < 10 ? 1 : 2; }, i1: 3, i2: 10, ng: 3 }
+  ];
+  function solve3(A, y) { /* 3x3 연립방정식 */
+    var M = [A[0].concat(y[0]), A[1].concat(y[1]), A[2].concat(y[2])], i, j, k;
+    for (i = 0; i < 3; i++) {
+      var piv = i; for (j = i + 1; j < 3; j++) if (Math.abs(M[j][i]) > Math.abs(M[piv][i])) piv = j;
+      var tmp = M[i]; M[i] = M[piv]; M[piv] = tmp;
+      if (Math.abs(M[i][i]) < 1e-9) return null;
+      for (j = i + 1; j < 3; j++) { var fct = M[j][i] / M[i][i]; for (k = i; k < 4; k++) M[j][k] -= fct * M[i][k]; }
+    }
+    var x = [0, 0, 0];
+    for (i = 2; i >= 0; i--) { var sm = M[i][3]; for (j = i + 1; j < 3; j++) sm -= M[i][j] * x[j]; x[i] = sm / M[i][i]; }
+    return x;
+  }
+  function latticeFit(c0, mx) {
+    var minH = 0.025 * mx;
+    var c = c0.slice().sort(function (a, b) { return a.cx - b.cx; });
+    if (c.length < 8) return null;
+    c = splitWide(c).sort(function (a, b) { return a.cx - b.cx; });
+    var n = c.length;
+    if (n < 8 || n > 40) return null;
+    var mh = median(c.map(function (q) { return q.h; })), mw = median(c.map(function (q) { return q.w; }));
+    if (mh < minH) return null; /* 작은 글씨(전화번호, 약관)는 번호가 아니다 */
+    var cx = c.map(function (q) { return q.cx; }), i, k, j, s, gi, seen = {}, pcs = [];
+    for (i = 0; i < n; i++) for (k = 1; k <= 2; k++) {
+      if (i + k >= n) continue;
+      var d = (cx[i + k] - cx[i]) / k;
+      if (d < 0.42 * mh || d > 1.3 * mh) continue;
+      var key = Math.round(d / (0.025 * mh));
+      if (!seen[key]) { seen[key] = 1; pcs.push(d); }
+    }
+    if (!pcs.length) return null;
+    var best = null, e = new Float64Array(16), dist = new Float64Array(16), who = new Int32Array(16), anchors = Math.min(4, n);
+    LAT_TPL.forEach(function (T, ti) {
+      pcs.forEach(function (p) {
+        var tol = 0.27 * p;
+        for (gi = 5; gi <= 16; gi++) { /* 묶음 사이 간격은 숫자 간격의 0.5배 이상 */
+          var G = gi * 0.1 * p;
+          for (i = 0; i < anchors; i++) for (s = 0; s < T.n; s++) {
+            var base = cx[i] - (s * p + T.grp(s) * G), t, ptr = 0, M = 0, U = 0, rs = 0, last = T.n - 1;
+            for (t = 0; t < T.n; t++) { e[t] = base + t * p + T.grp(t) * G; dist[t] = 1e9; who[t] = -1; }
+            for (j = 0; j < n; j++) {
+              while (ptr < last && e[ptr + 1] <= cx[j]) ptr++;
+              var a2 = Math.abs(cx[j] - e[ptr]), b2 = ptr < last ? Math.abs(cx[j] - e[ptr + 1]) : 1e9, sl = a2 <= b2 ? ptr : ptr + 1, dd = Math.min(a2, b2);
+              if (dd <= tol && dd < dist[sl]) { dist[sl] = dd; who[sl] = j; }
+            }
+            var head = 0, tail = 0, mid = 0;
+            for (t = 0; t < T.n; t++) if (who[t] >= 0) { M++; rs += dist[t]; if (t < 4) head++; else if (t >= T.n - 4) tail++; else mid++; }
+            if (M < 9 || head < 2 || tail < 2 || mid < 3) continue;
+            for (j = 0; j < n; j++) {
+              var owned = false;
+              for (t = 0; t < T.n; t++) if (who[t] === j) { owned = true; break; }
+              if (!owned && cx[j] > e[0] - 0.6 * p && cx[j] < e[last] + 0.6 * p) U++;
+            }
+            if (U > 3) continue;
+            var obj = M - 0.7 * U - 4 * (rs / M) / p - (ti === 1 ? 0.3 : 0);
+            if (!best || obj > best.obj) best = { obj: obj, T: T, M: M, U: U, res: rs / M / p, p: p, G: G, e: Array.prototype.slice.call(e, 0, T.n), who: Array.prototype.slice.call(who, 0, T.n) };
+          }
+        }
+      });
+    });
+    if (!best) return null;
+    var T0 = best.T, t2;
+    /* 일치한 숫자들로 최소제곱 보정: x = c0 + p*t + G*group(t) */
+    (function () {
+      var A = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], y = [0, 0, 0];
+      for (var t = 0; t < T0.n; t++) if (best.who[t] >= 0) {
+        var v = [1, t, T0.grp(t)], xx = cx[best.who[t]];
+        for (var r = 0; r < 3; r++) { for (var q = 0; q < 3; q++) A[r][q] += v[r] * v[q]; y[r] += v[r] * xx; }
+      }
+      var sol = solve3(A, y);
+      if (sol && sol[1] > 0.4 * mh && sol[1] < 1.35 * mh && sol[2] > 0.3 * sol[1]) { for (var t3 = 0; t3 < T0.n; t3++) best.e[t3] = sol[0] + sol[1] * t3 + sol[2] * T0.grp(t3); best.p = sol[1]; best.G = sol[2]; }
+    })();
+    var ys0 = [], ys1 = [];
+    for (t2 = 0; t2 < T0.n; t2++) if (best.who[t2] >= 0) { ys0.push(c[best.who[t2]].y0); ys1.push(c[best.who[t2]].y1); }
+    var y0 = median(ys0), y1 = median(ys1), win = [];
+    var f = fitLine(c.filter(function (q, ix) { return best.who.indexOf(ix) >= 0; }));
+    for (t2 = 0; t2 < T0.n; t2++) {
+      var ex = best.e[t2], ey = f.a + f.b * ex;
+      win.push({ x0: ex - mw / 2, x1: ex + mw / 2, y0: ey - (y1 - y0) / 2, y1: ey + (y1 - y0) / 2, w: mw, h: y1 - y0, cx: ex, cy: ey, synth: best.who[t2] < 0 });
+    }
+    var score = 1.30 + 0.03 * (best.M - 9) - 0.6 * best.res - 0.05 * best.U
+      + 0.15 * Math.min(1, mh / (0.04 * mx)) + 0.15 * Math.min(1, Math.max(0, (best.G / best.p - 0.5) / 0.6)) - 0.15;
+    return { kind: 'lat', score: score, sep: best.G / mh, dev: 0, n: T0.n, i1: T0.i1, i2: T0.i2, win: win, mh: mh, matched: best.M,
+      cutx: [(best.e[T0.i1] + best.e[T0.i1 + 1]) / 2, (best.e[T0.i2] + best.e[T0.i2 + 1]) / 2] };
+  }
+
+  function bestNumber(scans, mx) {
+    var best = null, seen = [], list = [];
+    function take(cc) {
+      var r = evalChain(cc);
+      if (!r || r.score < 1.3) { var lt = latticeFit(cleanChain(cc), mx); if (lt && (!r || lt.score > r.score)) r = lt; }
+      if (!r) return;
+      var f = fitLine(r.win);
+      r.angle = Math.atan(f.b) * 180 / Math.PI;
+      list.push(r);
+      if (!best || r.score > best.score || (Math.abs(r.score - best.score) < 0.05 && r.mh > best.mh)) best = r;
+    }
+    scans.forEach(function (sc) {
+      sc.chains.forEach(function (ch) {
+        if (ch.length < 6) return;
+        take(ch);
+        var c = cleanChain(ch); if (c.length < 6) return;
+        var mh = median(c.map(function (q) { return q.h; })), cy = c[c.length >> 1].cy, x0 = c[0].cx, x1 = c[c.length - 1].cx, dup = false;
+        seen.forEach(function (s0) { if (Math.abs(s0.cy - cy) < 0.5 * mh && Math.abs(s0.mh - mh) < 0.3 * mh && x1 > s0.x0 && x0 < s0.x1) dup = true; });
+        if (dup) return;
+        seen.push({ cy: cy, mh: mh, x0: x0, x1: x1 });
+        take(gatherBand(scans, ch));
+      });
+    });
+    if (best) {
+      list.sort(function (a, b) { return b.score - a.score; });
+      var uniq = [];
+      list.forEach(function (r) {
+        var cy = r.win[r.win.length >> 1].cy, x0 = r.win[0].cx;
+        for (var i = 0; i < uniq.length; i++) { var u = uniq[i]; if (Math.abs(u.win[u.win.length >> 1].cy - cy) < 0.6 * r.mh && Math.abs(u.win[0].cx - x0) < 3 * r.mh) return; }
+        uniq.push(r);
+      });
+      best.cands = uniq.slice(0, 4);
+    }
+    return best;
+  }
+
+  /* ---------- 사진 방향·기울기 보정을 포함한 번호 줄 탐색 ---------- */
+  function analysisOf(canvas, quarter) {
+    var s = Math.min(1, AN_MAX / Math.max(canvas.width, canvas.height));
+    var c = document.createElement('canvas'), w = Math.round(canvas.width * s), h = Math.round(canvas.height * s);
+    var swap = quarter % 2 === 1;
+    c.width = swap ? h : w; c.height = swap ? w : h;
+    var x = c.getContext('2d', { willReadFrequently: true });
+    x.translate(c.width / 2, c.height / 2); x.rotate(quarter * Math.PI / 2);
+    x.drawImage(canvas, -w / 2, -h / 2, w, h);
+    return { canvas: c, scale: s };
+  }
+  function findNumberLine(canvas, quarter, early) {
+    var an = analysisOf(canvas, quarter), gr = grayOf(an.canvas), cache = {}, scans = [], best = null, vi, mx = Math.max(gr.w, gr.h);
+    for (vi = 0; vi < VARIANTS.length; vi++) {
+      var sc = scanVariant(gr, VARIANTS[vi], cache);
+      sc.variant = VARIANTS[vi]; scans.push(sc);
+      best = bestNumber(scans, mx);
+      if (early && best && best.score >= 1.9 && best.n === 16 && best.dev === 0) break;
+    }
+    /* 번호가 약하게만 잡히면(숫자 일부만 찾음), 줄무늬를 흐려 지운 변형을 추가로 읽어 보고 더 나을 때만 채택한다 */
+    var weak = best && best.score >= 1.25 && (best.score < 1.4 || (best.kind === 'lat' && best.matched < 13)); /* 이미 어느 정도 잡힌 줄만 다듬는다. 줄이 없는 방향에서 새로 만들어 내지 않는다 */
+    if (weak) {
+      var baseScans = scans.slice(), baseBest = best, grB = blurGr(gr, Math.max(2, Math.round(mx / 400))), cacheB = {};
+      ['dark2', 'light2'].forEach(function (vn) { var sb = scanVariant(grB, vn, cacheB); sb.variant = vn + 'B'; scans.push(sb); });
+      var b2 = bestNumber(scans, mx);
+      var rowOf = function (q) { return q.win[q.win.length >> 1].cy; };
+      if (b2 && b2.score >= baseBest.score + 0.03 && Math.abs(rowOf(b2) - rowOf(baseBest)) < 0.8 * baseBest.mh) best = b2; else { best = baseBest; scans = baseScans; }
+    }
+    return { best: best, scans: scans, scale: an.scale, gr: gr };
+  }
+
+  /* ---------- OCR (유효기간, CVC 확인용) ---------- */
+  var worker = null, workerP = null, job = 0, busy = false, rerun = false, engineFailed = false;
   function setMsg(text, cls) { var m = $('autoMsg'); m.textContent = text; m.className = 'msg' + (cls ? ' ' + cls : ''); }
   function setBar(p) { var b = $('autoBar'); b.hidden = p == null; $('autoFill').style.width = (p == null ? 0 : Math.round(p * 100)) + '%'; }
   function getWorker() {
@@ -665,71 +894,499 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
           setMsg('인식 엔진 내려받는 중… 처음 한 번만 걸립니다.', 'busy'); setBar(m.progress);
         }
       }
-    }).then(function (w) {
-      return w.setParameters({
-        tessedit_char_whitelist: '0123456789/-. ',
-        tessedit_pageseg_mode: '11',
-        preserve_interword_spaces: '1'
-      }).then(function () { worker = w; return w; });
-    });
+    }).then(function (w) { worker = w; return w; });
     workerP.catch(function () { workerP = null; });
     return workerP;
   }
-  function applyFound(found) {
-    var msgs = [];
-    if (found.num) {
-      var b = found.num.box;
-      boxes.num = { x: b.x, y: b.y, w: b.w, h: b.h };
-      midStart = Math.max(5, Math.min(45, Math.round(found.num.startPct * 2) / 2));
-      midEnd = Math.max(55, Math.min(95, Math.round(found.num.endPct * 2) / 2));
-      $('midStart').value = midStart; $('midEnd').value = midEnd;
-      $('midStartOut').textContent = midStart + '%'; $('midEndOut').textContent = midEnd + '%';
-      msgs.push('카드번호 ' + found.num.n + '자리');
+  function otsu(g) {
+    var hist = new Uint32Array(256), i, n = g.length;
+    for (i = 0; i < n; i++) hist[g[i]]++;
+    var sum = 0; for (i = 0; i < 256; i++) sum += i * hist[i];
+    var sb = 0, wb = 0, mx = -1, th = 128;
+    for (i = 0; i < 256; i++) {
+      wb += hist[i]; if (!wb) continue;
+      var wf = n - wb; if (!wf) break;
+      sb += i * hist[i];
+      var mb = sb / wb, mf = (sum - sb) / wf, v = wb * wf * (mb - mf) * (mb - mf);
+      if (v > mx) { mx = v; th = i; }
     }
-    if (found.exp) { var e = found.exp.box; boxes.exp = { x: e.x, y: e.y, w: e.w, h: e.h }; msgs.push('유효기간'); }
-    if (found.cvc) { var c = found.cvc.box; boxes.cvc = { x: c.x, y: c.y, w: c.w, h: c.h }; msgs.push('CVC'); }
-    return msgs;
+    return th;
+  }
+  /* 글자 줄 하나를 잘라 확대하고 흑백으로 만든다. 검은 글자, 흰 바탕, 사방 여백 */
+  /* 글자 영역만 잘라 흑백으로 만든다. 이웃 글자나 어두운 배경이 섞이지 않게 영역 밖은 흰색으로 둔다. */
+  function cropForOcr(canvas, box, polarity) {
+    var mx = Math.max(2, Math.round(box.h * 0.3)), my = Math.max(2, Math.round(box.h * 0.22));
+    var sx = Math.max(0, Math.floor(box.x - mx)), sy = Math.max(0, Math.floor(box.y - my));
+    var sw = Math.min(canvas.width - sx, Math.ceil(box.w + mx * 2)), sh = Math.min(canvas.height - sy, Math.ceil(box.h + my * 2));
+    var sc = Math.max(0.5, Math.min(4, 64 / box.h));
+    var c = document.createElement('canvas'); c.width = Math.max(8, Math.round(sw * sc)); c.height = Math.max(8, Math.round(sh * sc));
+    var x = c.getContext('2d', { willReadFrequently: true });
+    x.imageSmoothingQuality = 'high'; x.drawImage(canvas, sx, sy, sw, sh, 0, 0, c.width, c.height);
+    var id = x.getImageData(0, 0, c.width, c.height), d = id.data, g = new Uint8Array(c.width * c.height), i, p;
+    for (i = 0, p = 0; i < g.length; i++, p += 4) g[i] = (d[p] * 77 + d[p + 1] * 150 + d[p + 2] * 29) >> 8;
+    var T = otsu(g);
+    for (i = 0, p = 0; i < g.length; i++, p += 4) {
+      var ink = polarity === 'dark' ? g[i] < T : g[i] > T;
+      d[p] = d[p + 1] = d[p + 2] = ink ? 0 : 255; d[p + 3] = 255;
+    }
+    x.putImageData(id, 0, 0);
+    /* 가장자리에 닿은 잉크(상자 테두리, 배경)는 글자가 아니므로 지운다 */
+    var W = c.width, H = c.height, data = x.getImageData(0, 0, W, H), dd = data.data, stack = [], seen = new Uint8Array(W * H), k;
+    function push(px, py) { var q = py * W + px; if (!seen[q] && dd[q * 4] === 0) { seen[q] = 1; stack.push(q); } }
+    for (k = 0; k < W; k++) { push(k, 0); push(k, H - 1); }
+    for (k = 0; k < H; k++) { push(0, k); push(W - 1, k); }
+    while (stack.length) {
+      var q = stack.pop(), qx = q % W, qy = (q / W) | 0;
+      dd[q * 4] = dd[q * 4 + 1] = dd[q * 4 + 2] = 255;
+      if (qx > 0) push(qx - 1, qy); if (qx < W - 1) push(qx + 1, qy); if (qy > 0) push(qx, qy - 1); if (qy < H - 1) push(qx, qy + 1);
+    }
+    x.putImageData(data, 0, 0);
+    var o = document.createElement('canvas'); o.width = c.width + 60; o.height = c.height + 60;
+    var ox = o.getContext('2d'); ox.fillStyle = '#fff'; ox.fillRect(0, 0, o.width, o.height); ox.drawImage(c, 30, 30);
+    return o;
+  }
+  function ocrText(cv, psm) {
+    return getWorker().then(function (w) {
+      return w.setParameters({ tessedit_char_whitelist: '0123456789/-. ', tessedit_pageseg_mode: String(psm || 7), preserve_interword_spaces: '1' })
+        .then(function () { return w.recognize(cv); })
+        .then(function (res) {
+          var ws = (res.data && res.data.words) || [], t = ws.map(function (q) { return q.text; }).join(' ');
+          if (!ws.length && res.data && res.data.text) t = res.data.text;
+          return t;
+        });
+    });
+  }
+  function parseExpiry(t) {
+    var cur = new Date().getFullYear() % 100, s = t.replace(/[^0-9\/]/g, ''), m, re = /(0[1-9]|1[0-2])\/?(\d{2})/g;
+    while ((m = re.exec(s))) {
+      var yy = parseInt(m[2], 10);
+      if (yy >= cur - 3 && yy <= cur + 12) return true;
+      re.lastIndex = m.index + 1;
+    }
+    return false;
+  }
+  function boxOf(cs, f) {
+    var x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+    cs.forEach(function (q) { x0 = Math.min(x0, q.x0); y0 = Math.min(y0, q.y0); x1 = Math.max(x1, q.x1); y1 = Math.max(y1, q.y1); });
+    return { x: x0 / f, y: y0 / f, w: (x1 - x0) / f, h: (y1 - y0) / f };
+  }
+  function groupBySpacing(c) { /* 간격이 큰 곳으로 묶음을 나눔 */
+    var g = gapsOf(c), mh = median(c.map(function (q) { return q.h; })), out = [[c[0]]];
+    for (var i = 0; i < g.length; i++) { if (g[i] > Math.max(0.55 * mh, 2.2 * median(g.filter(function (v) { return v > -1; })))) out.push([c[i + 1]]); else out[out.length - 1].push(c[i + 1]); }
+    return out;
+  }
+  function overlaps(a, b) { return !(a.x + a.w < b.x || b.x + b.w < a.x || a.y + a.h < b.y || b.y + b.h < a.y); }
+
+
+  /* ---------- 유효기간 보조 탐색: 번호 줄 아래 띠 영역을 통째로 읽어 MM/YY 모양을 찾는다 ---------- */
+  function wordsOfResult(data) {
+    var ws = [];
+    if (data && data.words && data.words.length) ws = data.words;
+    else if (data && data.blocks) data.blocks.forEach(function (b) { (b.paragraphs || []).forEach(function (p) { (p.lines || []).forEach(function (l) { (l.words || []).forEach(function (w) { ws.push(w); }); }); }); });
+    return ws.filter(function (w) { return w && w.text && w.bbox; });
+  }
+  function ocrWords(cv, psm) {
+    return getWorker().then(function (w) {
+      return w.setParameters({ tessedit_char_whitelist: '0123456789/-. ', tessedit_pageseg_mode: String(psm || 11), preserve_interword_spaces: '1' })
+        .then(function () { return w.recognize(cv); })
+        .then(function (res) { return wordsOfResult(res.data); });
+    });
+  }
+  function blurGr(gr, r) { /* 가는 줄무늬를 지우기 위한 상자 흐림 */
+    var g = gr.g, w = gr.w, h = gr.h, m = boxMean(integral(g, w, h), w, h, r), o = new Uint8Array(w * h);
+    for (var i = 0; i < o.length; i++) o[i] = m[i];
+    return { g: o, w: w, h: h, rgba: gr.rgba };
+  }
+  function inkCanvas(srcCanvas, variant, blurR) {
+    var gr = grayOf(srcCanvas); if (blurR) gr = blurGr(gr, blurR);
+    var ink = makeInk(gr, variant, {}), c = document.createElement('canvas');
+    c.width = gr.w; c.height = gr.h;
+    var x = c.getContext('2d'), id = x.createImageData(gr.w, gr.h), d = id.data;
+    for (var i = 0, p = 0; i < ink.length; i++, p += 4) { var v = ink[i] ? 0 : 255; d[p] = d[p + 1] = d[p + 2] = v; d[p + 3] = 255; }
+    x.putImageData(id, 0, 0);
+    var o = document.createElement('canvas'); o.width = c.width + 40; o.height = c.height + 40;
+    var ox = o.getContext('2d'); ox.fillStyle = '#fff'; ox.fillRect(0, 0, o.width, o.height); ox.drawImage(c, 20, 20);
+    return o;
+  }
+  function expiryInText(t) {
+    var cur = new Date().getFullYear() % 100, s2 = t.replace(/\s+/g, ''), m = /(0[1-9]|1[0-2])[\/\-.](\d{2})(?!\d)/.exec(s2);
+    if (m) { var yy = parseInt(m[2], 10); if (yy >= cur - 3 && yy <= cur + 12) return { slash: true }; }
+    m = /^(0[1-9]|1[0-2])(\d{2})$/.exec(s2);
+    if (m) { var y2 = parseInt(m[2], 10); if (y2 >= cur && y2 <= cur + 12) return { slash: false }; }
+    return null;
+  }
+  function expiryWindows(ws) {
+    var lines = [], out = [];
+    ws.slice().sort(function (a, b) { return (a.bbox.y0 + a.bbox.y1) - (b.bbox.y0 + b.bbox.y1); }).forEach(function (w) {
+      var cy = (w.bbox.y0 + w.bbox.y1) / 2, h = w.bbox.y1 - w.bbox.y0, L = null;
+      for (var i = lines.length - 1; i >= 0; i--) if (Math.abs(cy - lines[i].cy) < Math.max(h, lines[i].h) * 0.6) { L = lines[i]; break; }
+      if (!L) { L = { cy: cy, h: h, ws: [] }; lines.push(L); }
+      L.ws.push(w); L.cy = (L.cy * (L.ws.length - 1) + cy) / L.ws.length; L.h = Math.max(L.h, h);
+    });
+    lines.forEach(function (L) {
+      L.ws.sort(function (a, b) { return a.bbox.x0 - b.bbox.x0; });
+      for (var i = 0; i < L.ws.length; i++) {
+        var t = '', bb = null;
+        for (var j = i; j < Math.min(L.ws.length, i + 6); j++) {
+          var w = L.ws[j];
+          if (j > i && w.bbox.x0 - L.ws[j - 1].bbox.x1 > 1.6 * L.h) break;
+          t += String(w.text).trim();
+          bb = bb ? { x0: Math.min(bb.x0, w.bbox.x0), y0: Math.min(bb.y0, w.bbox.y0), x1: Math.max(bb.x1, w.bbox.x1), y1: Math.max(bb.y1, w.bbox.y1) } : { x0: w.bbox.x0, y0: w.bbox.y0, x1: w.bbox.x1, y1: w.bbox.y1 };
+          var r = expiryInText(t);
+          if (r) { out.push({ w: { bbox: bb }, r: r }); break; }
+        }
+      }
+    });
+    return out;
+  }
+  function bandExpiry(canvas, nb) {
+    var Hn = nb.h, bx0 = Math.max(0, Math.floor(nb.x - 0.5 * Hn)), bx1 = Math.min(canvas.width, Math.ceil(nb.x + nb.w + 0.5 * Hn));
+    var by0 = Math.min(canvas.height - 2, Math.floor(nb.y + nb.h + 0.15 * Hn)), by1 = Math.min(canvas.height, Math.ceil(nb.y + nb.h + 4.5 * Hn));
+    if (by1 - by0 < 10 || bx1 - bx0 < 10) return Promise.resolve(null);
+    var sc = Math.max(0.5, Math.min(3, 36 / (0.5 * Hn))), band = document.createElement('canvas');
+    band.width = Math.round((bx1 - bx0) * sc); band.height = Math.round((by1 - by0) * sc);
+    var bc = band.getContext('2d', { willReadFrequently: true }); bc.imageSmoothingQuality = 'high';
+    bc.drawImage(canvas, bx0, by0, bx1 - bx0, by1 - by0, 0, 0, band.width, band.height);
+    var found = null, chain = Promise.resolve();
+    [['dark4', 0], ['light4', 0], ['dark2', 2], ['light2', 2], ['dark2', 0], ['light2', 0]].forEach(function (vb) {
+      chain = chain.then(function () {
+        if (found) return;
+        return ocrWords(inkCanvas(band, vb[0], vb[1]), 11).then(function (ws) {
+          var cands = [];
+          ws.forEach(function (w, i) {
+            var t = String(w.text).trim(), r = expiryInText(t);
+            if (r) cands.push({ w: w, r: r });
+            else if (i + 1 < ws.length) { /* '05/' + '31' 처럼 둘로 갈라진 경우 */
+              var t2 = t + String(ws[i + 1].text).trim(), r2 = expiryInText(t2);
+              if (r2) cands.push({ w: { bbox: { x0: Math.min(w.bbox.x0, ws[i + 1].bbox.x0), y0: Math.min(w.bbox.y0, ws[i + 1].bbox.y0), x1: Math.max(w.bbox.x1, ws[i + 1].bbox.x1), y1: Math.max(w.bbox.y1, ws[i + 1].bbox.y1) } }, r: r2 });
+            }
+          });
+          expiryWindows(ws).forEach(function (q) { cands.push(q); }); /* '0','5','/','3','1' 처럼 글자 단위로 쪼개져도 이어 붙여 찾는다 */
+          cands = cands.filter(function (q) { return (q.w.bbox.y1 - q.w.bbox.y0) > 6; });
+          cands.sort(function (a, b) { return (b.r.slash ? 1 : 0) - (a.r.slash ? 1 : 0); });
+          if (cands.length) {
+            var bb = cands[0].w.bbox;
+            found = { x: bx0 + (bb.x0 - 20) / sc, y: by0 + (bb.y0 - 20) / sc, w: (bb.x1 - bb.x0) / sc, h: (bb.y1 - bb.y0) / sc };
+          }
+        });
+      });
+    });
+    return chain.then(function () { return found; });
+  }
+
+  /* 유효기간·CVC 후보 수집과 OCR 확인 */
+  function findSmallFields(canvas, scans, f, numBox, wantCvc, lim) {
+    lim = lim || {};
+    var cands = [], seen = [];
+    scans.forEach(function (sc) {
+      sc.chains.forEach(function (ch) {
+        var c = cleanChain(ch); if (c.length < 3) return;
+        var b = boxOf(c, f); b.n = c.length; b.c = c; b.mh = median(c.map(function (q) { return q.h; })) / f;
+        for (var i = 0; i < seen.length; i++) if (Math.abs(seen[i].x - b.x) < b.h && Math.abs(seen[i].y - b.y) < b.h && Math.abs(seen[i].w - b.w) < b.h) return;
+        seen.push(b); cands.push(b);
+      });
+    });
+    var Hn = numBox ? numBox.h : 0;
+    var exp = cands.filter(function (b) {
+      if (b.n < 4 || b.n > 6) return false;
+      if (numBox && overlaps(b, numBox)) return false;
+      if (Hn && (b.mh < Hn * 0.25 || b.mh > Hn * 1.5)) return false;
+      return b.w < b.mh * 9;
+    });
+    exp.forEach(function (b) { b.s = (numBox && b.y > numBox.y ? 2 : 0) + (b.n === 5 ? 1 : 0) + (Hn ? 1 - Math.abs(Math.log(b.mh / (Hn * 0.7))) : 0); });
+    exp.sort(function (a, b) { return b.s - a.s; });
+    var cv = [];
+    if (wantCvc) {
+      cands.forEach(function (b) {
+        if (numBox && overlaps(b, numBox)) return;
+        var gps = groupBySpacing(b.c);
+        gps.forEach(function (g, gi) {
+          if (g.length !== 3) return;
+          var bb = boxOf(g, f); bb.mh = b.mh;
+          bb.s = b.mh * (gps.length > 1 && gi === gps.length - 1 ? 1.25 : 1); /* 서명란에서는 줄의 마지막 3자리가 CVC */
+          cv.push(bb);
+        });
+      });
+      cv.sort(function (a, b) { return b.s - a.s; });
+    }
+    var res = {};
+    var chain = Promise.resolve();
+    exp.slice(0, lim.exp || 7).forEach(function (b, idx) {
+      chain = chain.then(function () {
+        if (res.exp) return;
+        setMsg('유효기간을 확인하는 중… (' + (idx + 1) + ')', 'busy');
+        return ['dark', 'light'].reduce(function (pr, pol) {
+          return pr.then(function () {
+            if (res.exp) return;
+            return ocrText(cropForOcr(canvas, b, pol), 7).then(function (t) { if (parseExpiry(t)) res.exp = { x: b.x, y: b.y, w: b.w, h: b.h }; });
+          });
+        }, Promise.resolve());
+      });
+    });
+    cv.slice(0, lim.cvc || 6).forEach(function (b, idx) {
+      chain = chain.then(function () {
+        if (res.cvc) return;
+        setMsg('CVC를 확인하는 중… (' + (idx + 1) + ')', 'busy');
+        return ['dark', 'light'].reduce(function (pr, pol) {
+          return pr.then(function () {
+            if (res.cvc) return;
+            return ocrText(cropForOcr(canvas, b, pol), 7).then(function (t) { if (/^\D*\d{3}\D*$/.test(t.trim().replace(/\s+/g, ''))) res.cvc = { x: b.x, y: b.y, w: b.w, h: b.h }; });
+          });
+        }, Promise.resolve());
+      });
+    });
+    return chain.then(function () {
+      if (res.exp || !numBox) return res;
+      setMsg('유효기간을 다른 방법으로 찾는 중…', 'busy');
+      return bandExpiry(canvas, numBox).then(function (b) { if (b) res.exp = b; return res; });
+    });
+  }
+
+  /* ---------- 전체 흐름 ---------- */
+  var numInfo = null;
+  function applyNumber(r, f) {
+    var b = { x: r.x0 / f, y: r.y0 / f, w: (r.x1 - r.x0) / f, h: (r.y1 - r.y0) / f };
+    boxes.num = b;
+    var sp = (r.cut1 / f - b.x) / b.w * 100, ep = (r.cut2 / f - b.x) / b.w * 100;
+    midStart = Math.max(3, Math.min(47, Math.round(sp * 4) / 4));
+    midEnd = Math.max(53, Math.min(97, Math.round(ep * 4) / 4));
+    $('midStart').value = midStart; $('midEnd').value = midEnd;
+    $('midStartOut').textContent = midStart + '%'; $('midEndOut').textContent = midEnd + '%';
+  }
+
+  /* ---------- 위아래가 뒤집혔는지 판별: 번호 줄을 바로, 180° 돌려서 각각 읽어 보고 숫자를 더 잘 읽는 쪽을 택한다 ---------- */
+  function rot180(cv) {
+    var o = document.createElement('canvas'); o.width = cv.width; o.height = cv.height;
+    var x = o.getContext('2d'); x.translate(cv.width, cv.height); x.rotate(Math.PI); x.drawImage(cv, 0, 0);
+    return o;
+  }
+  function luhnOk(d) {
+    var sum = 0, alt = false;
+    for (var i = d.length - 1; i >= 0; i--) { var n = d.charCodeAt(i) - 48; if (alt) { n *= 2; if (n > 9) n -= 9; } sum += n; alt = !alt; }
+    return sum % 10 === 0;
+  }
+  function numScore(t) {
+    var d = t.replace(/\D/g, ''), sc = Math.min(d.length, 16);
+    if (d.length >= 13 && d.length <= 19 && luhnOk(d)) sc += 8;
+    return sc;
+  }
+  function orientVote(canvas, cuts, f) {
+    var box = { x: cuts.x0 / f, y: cuts.y0 / f, w: (cuts.x1 - cuts.x0) / f, h: (cuts.y1 - cuts.y0) / f }, v = { up: 0, down: 0 }, chain = Promise.resolve();
+    ['dark', 'light'].forEach(function (pol) {
+      chain = chain.then(function () {
+        var cv = cropForOcr(canvas, box, pol);
+        return ocrText(cv, 7).then(function (t) { v.up = Math.max(v.up, numScore(t)); return ocrText(rot180(cv), 7); })
+          .then(function (t) { v.down = Math.max(v.down, numScore(t)); });
+      });
+    });
+    return chain.then(function () { return v; });
+  }
+
+  /* ---------- 번호 줄 후보가 여러 개이고 점수가 비슷하면, 글자로 읽었을 때 숫자가 많이 읽히는 후보를 고른다 (카드 가장자리나 무늬를 번호로 착각하는 일을 막는다) ---------- */
+  function rerank(s, my) {
+    var best = s.found, cands = (best.cands || []).filter(function (c) { return c.score >= best.score - 0.45; }).slice(0, 3);
+    if (cands.length < 2) return Promise.resolve();
+    if (cands.indexOf(best) < 0) cands.unshift(best);
+    setMsg('번호 줄 후보를 확인하는 중…', 'busy');
+    return getWorker().then(function () {
+      var f = s.scale, res = [], chain = Promise.resolve();
+      cands.forEach(function (c) {
+        chain = chain.then(function () {
+          if (my !== job) return;
+          var cu = decideCuts(c), box = { x: cu.x0 / f, y: cu.y0 / f, w: (cu.x1 - cu.x0) / f, h: (cu.y1 - cu.y0) / f }, sc = 0;
+          return ['dark', 'light'].reduce(function (pr, pol) {
+            return pr.then(function () {
+              var cv = cropForOcr(work, box, pol);
+              return ocrText(cv, 7).then(function (t) { sc = Math.max(sc, numScore(t)); return ocrText(rot180(cv), 7); }).then(function (t) { sc = Math.max(sc, numScore(t)); });
+            });
+          }, Promise.resolve()).then(function () { res.push({ c: c, sc: sc }); });
+        });
+      });
+      return chain.then(function () {
+        var cur = null, top = null;
+        res.forEach(function (r) { if (r.c === best) cur = r; if (!top || r.sc > top.sc) top = r; });
+        if (cur && top && top.c !== best && top.sc >= 12 && top.sc >= cur.sc + 6) { var keepCands = best.cands; s.found = top.c; s.found.cands = keepCands; }
+      });
+    }, function () { engineFailed = true; });
+  }
+
+  function runAuto(my, opt) {
+    opt = opt || {};
+    var msgs = [], conf = 'none', iter = 0, qres = {}, baseRot = rot90;
+    function stale() { return my !== job; }
+    function step() {
+      var r0 = findNumberLine(work, 0, true), pick = { q: 0, r: r0 };
+      qres[0] = r0;
+      if (!r0.best || r0.best.score < 1.5) {
+        [1, 3].forEach(function (q) {
+          var rq = findNumberLine(work, q, true); qres[q] = rq;
+          if (rq.best && (!pick.r.best || rq.best.score > pick.r.best.score + 0.25)) pick = { q: q, r: rq };
+        });
+      }
+      var best = pick.r.best;
+      if (!best || best.score < (best.kind === 'lat' ? 1.12 : 1.2)) return { done: true, found: null, scans: pick.r.scans, scale: pick.r.scale };
+      if (pick.q !== 0) { rot90 = (rot90 + pick.q) % 4; rebuild(); iter++; return { done: false }; }
+      if (Math.abs(best.angle) > 0.45 && iter < 3) {
+        fine = Math.max(-45, Math.min(45, Math.round((fine - best.angle) * 100) / 100));
+        $('fine').value = fine; $('fineOut').textContent = (Math.round(fine * 10) / 10) + '°';
+        rebuild(); iter++; return { done: false };
+      }
+      return { done: true, found: best, scans: pick.r.scans, scale: pick.r.scale };
+    }
+    function summary() {
+      var warn = engineFailed ? ' 인식 엔진을 불러오지 못해 유효기간과 CVC는 직접 지정해야 합니다.' : '';
+      if (msgs.length) {
+        var c = conf === 'high' ? '' : conf === 'mid' ? ' 위치를 한 번 더 확인하세요.' : conf === 'low' ? ' 번호 위치가 불확실합니다. 아래 확대 화면에서 꼭 확인하세요.' : '';
+        setMsg('자동으로 찾음: ' + msgs.join(', ') + '.' + c + warn, conf === 'high' || conf === 'none' ? 'ok' : 'warn');
+      } else {
+        setMsg('자동으로 찾지 못했습니다. 카드가 화면에 크게 나오게 다시 찍거나 아래에서 직접 지정하세요.' + warn, 'warn');
+      }
+    }
+    function withNumber(s, cuts) {
+      var f = s.scale, found = s.found;
+      boxes = { num: null, exp: null, cvc: null };
+      applyNumber(cuts, f);
+      numInfo = { L: cuts.L, S: cuts.S, kind: cuts.kind, dev: cuts.dev, angle: found.angle, score: found.score, matched: found.matched };
+      msgs.push('카드번호 ' + (found.matched ? found.matched + '자리를 찾아 16자리로 추정' : cuts.L + '자리'));
+      conf = found.score >= 1.7 && cuts.dev === 0 ? 'high' : found.score >= 1.4 ? 'mid' : 'low';
+      refreshUI(); render();
+      var nb = boxes.num;
+      return getWorker().then(function () {
+        return findSmallFields(work, s.scans, f, nb, conf === 'low');
+      }).then(function (res) {
+        if (stale()) return;
+        if (res.exp) { boxes.exp = res.exp; msgs.push('유효기간'); }
+        if (res.cvc) { boxes.cvc = res.cvc; msgs.push('CVC'); }
+        if (!res.exp) return flipProbe(); /* 방향을 잘못 판단했을 수도 있으니, 유효기간이 안 보이면 반대 방향도 확인 */
+      }, function () { engineFailed = true; }).then(function () {
+        if (stale()) return;
+        refreshUI(); render(); drawVerify(); summary();
+      });
+    }
+    /* 유효기간이 안 보이면 방향이 틀렸을 수 있다. 180° 돌린 사진에서 (처음 찾은 번호 위치를 그대로 뒤집어 쓰고) 유효기간을 찾아 보고, 읽히면 돌린 쪽을 택하고 아니면 원래대로 되돌린다.
+       돌린 사진에서 번호를 새로 찾는 것은 처음 맞춘 위치보다 거칠 수 있어서, 훨씬 확실할 때만 새 결과를 쓴다. */
+    function flipProbe() {
+      setMsg('카드 방향을 다시 확인하는 중…', 'busy');
+      var keep = { rot: rot90, boxes: { num: boxes.num, exp: boxes.exp, cvc: boxes.cvc }, ms: midStart, me: midEnd, info: numInfo, conf: conf, m0: msgs[0] };
+      var nb = boxes.num, W = work.width, H = work.height, firstScore = numInfo ? numInfo.score : 0;
+      var nb2 = { x: W - nb.x - nb.w, y: H - nb.y - nb.h, w: nb.w, h: nb.h };
+      rot90 = (rot90 + 2) % 4; rebuild();
+      function restore() {
+        rot90 = keep.rot; rebuild();
+        boxes = keep.boxes; midStart = keep.ms; midEnd = keep.me; numInfo = keep.info; conf = keep.conf; msgs[0] = keep.m0;
+        $('midStart').value = midStart; $('midEnd').value = midEnd;
+        $('midStartOut').textContent = midStart + '%'; $('midEndOut').textContent = midEnd + '%';
+      }
+      return new Promise(function (r) { setTimeout(r, 20); }).then(function () {
+        var r0 = findNumberLine(work, 0, true), b = r0.best;
+        return findSmallFields(work, r0.scans, r0.scale, nb2, false).then(function (res) {
+          if (stale()) return;
+          if (!res.exp) { restore(); return; }
+          if (b && b.score >= firstScore + 0.2 && b.score >= (b.kind === 'lat' ? 1.12 : 1.2)) {
+            var cuts = decideCuts(b);
+            boxes = { num: null, exp: null, cvc: null }; applyNumber(cuts, r0.scale);
+            numInfo = { L: cuts.L, S: cuts.S, kind: cuts.kind, dev: cuts.dev, angle: b.angle, score: b.score, matched: b.matched };
+            msgs[0] = '카드번호 ' + (b.matched ? b.matched + '자리를 찾아 16자리로 추정' : cuts.L + '자리');
+            conf = b.score >= 1.7 && cuts.dev === 0 ? 'high' : b.score >= 1.4 ? 'mid' : 'low';
+          } else {
+            boxes = { num: nb2, exp: null, cvc: null };
+            var ms2 = 100 - keep.me, me2 = 100 - keep.ms;
+            midStart = ms2; midEnd = me2;
+            $('midStart').value = midStart; $('midEnd').value = midEnd;
+            $('midStartOut').textContent = midStart + '%'; $('midEndOut').textContent = midEnd + '%';
+          }
+          boxes.exp = res.exp; msgs.push('유효기간');
+        });
+      });
+    }
+    /* 번호가 없는 면(뒷면 등): 네 방향을 돌려 가며 유효기간이나 CVC가 읽히는 방향을 찾는다 */
+    function withoutNumber() {
+      boxes = { num: null, exp: null, cvc: null }; numInfo = null; refreshUI(); render();
+      var order = [0, 1, 3, 2], got = null, chain = Promise.resolve();
+      return getWorker().then(function () {
+        order.forEach(function (q, oi) {
+          chain = chain.then(function () {
+            if (got || stale()) return;
+            setMsg('카드 방향을 확인하는 중… (' + (oi + 1) + '/4)', 'busy');
+            rot90 = (baseRot + q) % 4; rebuild();
+            return new Promise(function (r) { setTimeout(r, 20); }).then(function () {
+              var r = qres[q] || findNumberLine(work, 0, false);
+              return findSmallFields(work, r.scans, r.scale, null, true, { exp: 3, cvc: 3 });
+            }).then(function (res) { if (res.exp || res.cvc) got = res; });
+          });
+        });
+        return chain;
+      }, function () { engineFailed = true; }).then(function () {
+        if (stale()) return;
+        if (got) {
+          if (got.exp) { boxes.exp = got.exp; msgs.push('유효기간'); }
+          if (got.cvc) { boxes.cvc = got.cvc; msgs.push('CVC'); }
+        } else { rot90 = baseRot; rebuild(); }
+        refreshUI(); render(); drawVerify(); summary();
+      });
+    }
+    return new Promise(function (resolve) {
+      (function loop() {
+        setTimeout(function () {
+          setMsg(iter ? '사진을 바로잡고 다시 찾는 중…' : '카드번호를 찾는 중…', 'busy');
+          var sres = step();
+          if (!sres.done) { loop(); return; }
+          resolve(sres);
+        }, 20);
+      })();
+    }).then(function (s) {
+      if (stale()) return;
+      if (!s.found) return withoutNumber();
+      return rerank(s, my).then(function () {
+      if (stale()) return;
+      var cuts = decideCuts(s.found);
+      setMsg('카드 방향을 확인하는 중…', 'busy');
+      return getWorker().then(function () { return orientVote(work, cuts, s.scale); }, function () { engineFailed = true; return null; })
+        .then(function (v) {
+          if (stale()) return;
+          if (v && !opt.flipped && v.down >= v.up + 4 && v.down >= 9) { rot90 = (rot90 + 2) % 4; rebuild(); return runAuto(my, { flipped: true }); }
+          return withNumber(s, cuts);
+        });
+      });
+    });
   }
   function autoDetect() {
     if (!work) return Promise.resolve();
     if (busy) { rerun = true; return Promise.resolve(); }
-    busy = true; rerun = false;
+    busy = true; rerun = false; engineFailed = false;
     var my = ++job;
-    $('autoBtn').disabled = true;
-    setMsg('인식 엔진 준비 중…', 'busy'); setBar(null);
-    return getWorker().then(function (w) {
-      var modes = ['gray', 'invert', 'thresh', 'threshInv'], found = {}, snapshot = work;
-      var chain = Promise.resolve();
-      modes.forEach(function (mode, idx) {
-        chain = chain.then(function () {
-          if (found.cvc || (found.num && found.exp) || my !== job || snapshot !== work) return;
-          setMsg('글자를 찾는 중… (' + (idx + 1) + '/' + modes.length + ')', 'busy'); setBar((idx + 0.3) / modes.length);
-          return new Promise(function (r) { setTimeout(r, 30); }).then(function () {
-            return w.recognize(prep(snapshot, mode));
-          }).then(function (res) {
-            var r = detect(wordsFromData(res.data));
-            ['num', 'exp', 'cvc'].forEach(function (k) { if (!found[k] && r[k]) found[k] = r[k]; });
-          });
-        });
-      });
-      return chain.then(function () {
-        if (my !== job || snapshot !== work) return;
-        var msgs = applyFound(found);
-        setBar(null); refreshUI(); render();
-        if (msgs.length) setMsg('자동으로 찾음: ' + msgs.join(', ') + '. 검은 칸이 정확한지 확인하세요.', 'ok');
-        else setMsg('자동으로 찾지 못했습니다. 카드를 똑바로 돌리고 ‘자동으로 찾기’를 다시 누르거나, 아래에서 직접 지정하세요.', 'warn');
-      });
-    }).catch(function () {
-      setBar(null);
-      setMsg('인식 엔진을 불러오지 못했습니다. 인터넷 연결을 확인하거나 직접 지정하세요.', 'warn');
+    $('autoBtn').disabled = true; setBar(null);
+    return runAuto(my).catch(function (e) {
+      setMsg('자동 찾기 중 문제가 생겼습니다. 직접 지정해 주세요.', 'warn');
     }).then(function () {
-      busy = false; $('autoBtn').disabled = false;
+      busy = false; $('autoBtn').disabled = false; setBar(null);
       if (rerun) autoDetect();
     });
   }
   $('autoBtn').addEventListener('click', function () {
     boxes = { num: null, exp: null, cvc: null }; refreshUI(); render(); autoDetect();
   });
+
+  /* ---------- 확대 확인 화면: 번호 줄만 크게 보여 주고 가려질 구간을 표시 ---------- */
+  function drawVerify() {
+    var cv = $('verify'), box = boxes.num, wrap = $('verifyWrap');
+    if (!box || !work) { wrap.hidden = true; return; }
+    wrap.hidden = false;
+    var padx = box.h * 0.6, pady = box.h * 0.7;
+    var sx = Math.max(0, box.x - padx), sy = Math.max(0, box.y - pady);
+    var sw = Math.min(work.width - sx, box.w + padx * 2), sh = Math.min(work.height - sy, box.h + pady * 2);
+    var W = Math.min(wrap.clientWidth - 2, 700), sc = W / sw; cv.width = Math.round(W); cv.height = Math.max(40, Math.round(sh * sc));
+    cv.style.width = cv.width + 'px'; cv.style.height = cv.height + 'px';
+    var x = cv.getContext('2d'); x.drawImage(work, sx, sy, sw, sh, 0, 0, cv.width, cv.height);
+    var bx = (box.x - sx) * sc, bw = box.w * sc, by = (box.y - sy) * sc, bh = box.h * sc;
+    var mx = bx + bw * midStart / 100, mw = bw * (midEnd - midStart) / 100, pv = Math.max(box.h * 0.2, work.width * 0.004) * sc;
+    x.fillStyle = 'rgba(0,0,0,0.88)'; x.fillRect(mx, by - pv, mw, bh + pv * 2);
+    x.strokeStyle = '#1F4FD8'; x.lineWidth = 2;
+    x.beginPath(); x.moveTo(mx, by - pv - 8); x.lineTo(mx, by + bh + pv + 8); x.moveTo(mx + mw, by - pv - 8); x.lineTo(mx + mw, by + bh + pv + 8); x.stroke();
+    x.font = '700 12px ' + getComputedStyle(document.body).fontFamily; x.textBaseline = 'top';
+    function lab(t, px) { var tw = x.measureText(t).width + 10; x.fillStyle = '#1F4FD8'; x.fillRect(px, 2, tw, 18); x.fillStyle = '#fff'; x.fillText(t, px + 5, 5); }
+    lab('앞 4자리 보임', Math.max(2, bx)); lab('뒤 4자리 보임', Math.min(cv.width - 90, bx + bw - 86));
+  }
 
   /* ---------- 예시 카드 (가상의 번호) ---------- */
   function buildSample() {
