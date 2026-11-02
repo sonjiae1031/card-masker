@@ -75,7 +75,7 @@ body {
   display: flex;
   justify-content: center;
 }
-#view { display: block; touch-action: none; cursor: crosshair; max-width: 100%; }
+#view { display: block; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; cursor: crosshair; max-width: 100%; }
 .hint { margin: 0; font-size: 14px; min-height: 3em; }
 .hint b { font-weight: 700; }
 
@@ -166,6 +166,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
         <div class="row">
           <button class="btn small" id="rotL" type="button">왼쪽 90° 돌리기</button>
           <button class="btn small" id="rotR" type="button">오른쪽 90° 돌리기</button>
+          <button class="btn small" id="rot180" type="button">위아래 뒤집기</button>
         </div>
         <div class="slider">
           <label for="fine">기울기 보정</label>
@@ -253,7 +254,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
       st.className = 'state' + (boxes[k] ? ' set' : '');
       $('tool-' + k).className = 'tool' + (k === active ? ' on' : '');
     });
-    $('hint').innerHTML = HINT[active] + (boxes[active] ? ' 모서리 사각형을 끌면 크기, 안쪽을 끌면 위치가 바뀝니다. 새로 그리려면 먼저 ‘지우기’를 누르세요.' : '');
+    $('hint').innerHTML = HINT[active] + (boxes[active] ? ' 네 모서리 사각형을 끌면 크기, 안쪽을 끌면 위치가 바뀝니다. 상자 밖을 끌면 새로 그립니다.' : '');
     $('makeBtn').disabled = !work;
   }
   function toast(msg) {
@@ -293,9 +294,10 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
     boxes = { num: null, exp: null, cvc: null };
     isSample = false;
     rebuild(); refreshUI(); render();
-    autoDetect();
+    autoDetect(true); /* 손으로 돌린 방향은 자동으로 다시 뒤집지 않는다 */
   }
   $('rotL').addEventListener('click', function () { if (!src) return; rot90 = (rot90 + 3) % 4; onRotate(); });
+  $('rot180').addEventListener('click', function () { if (!src) return; rot90 = (rot90 + 2) % 4; onRotate(); });
   $('rotR').addEventListener('click', function () { if (!src) return; rot90 = (rot90 + 1) % 4; onRotate(); });
   $('fine').addEventListener('input', function (e) {
     fine = parseFloat(e.target.value); $('fineOut').textContent = fine + '°';
@@ -369,8 +371,10 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
       }
       tag(LABEL[k], d.x, d.y);
       if (k === active) {
-        vctx.fillStyle = '#1F4FD8'; vctx.fillRect(d.x + d.w - 7, d.y + d.h - 7, 14, 14);
-        vctx.strokeStyle = '#fff'; vctx.lineWidth = 2; vctx.strokeRect(d.x + d.w - 7, d.y + d.h - 7, 14, 14);
+        [[d.x, d.y], [d.x + d.w, d.y], [d.x, d.y + d.h], [d.x + d.w, d.y + d.h]].forEach(function (c) {
+          vctx.fillStyle = '#1F4FD8'; vctx.fillRect(c[0] - 9, c[1] - 9, 18, 18);
+          vctx.strokeStyle = '#fff'; vctx.lineWidth = 2; vctx.strokeRect(c[0] - 9, c[1] - 9, 18, 18);
+        });
       }
     });
   }
@@ -382,18 +386,22 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   }
   view.addEventListener('pointerdown', function (e) {
     if (!work) return;
-    var p = pos(e), b = boxes[active];
+    var p = pos(e), b = boxes[active], touch = e.pointerType !== 'mouse', hs = touch ? 30 : 16, pad = touch ? 14 : 6;
     drag = null;
     if (b) {
-      var d = toDisp(b), hs = 22;
-      if (Math.abs(p.x - (d.x + d.w)) < hs && Math.abs(p.y - (d.y + d.h)) < hs) drag = { mode: 'resize', p0: p, orig: { x: b.x, y: b.y, w: b.w, h: b.h } };
-      else if (p.x >= d.x && p.x <= d.x + d.w && p.y >= d.y && p.y <= d.y + d.h) drag = { mode: 'move', p0: p, orig: { x: b.x, y: b.y, w: b.w, h: b.h } };
-      else return;
-    } else {
-      drag = { mode: 'draw', p0: p };
+      var d = toDisp(b), best = null, bd = 1e9;
+      [['nw', d.x, d.y], ['ne', d.x + d.w, d.y], ['sw', d.x, d.y + d.h], ['se', d.x + d.w, d.y + d.h]].forEach(function (c) {
+        var dist = Math.max(Math.abs(p.x - c[1]), Math.abs(p.y - c[2]));
+        if (dist < hs && dist < bd) { bd = dist; best = c[0]; }
+      });
+      if (best) drag = { mode: 'resize', corner: best, p0: p, orig: { x: b.x, y: b.y, w: b.w, h: b.h } };
+      else if (p.x >= d.x - pad && p.x <= d.x + d.w + pad && p.y >= d.y - pad && p.y <= d.y + d.h + pad) drag = { mode: 'move', p0: p, orig: { x: b.x, y: b.y, w: b.w, h: b.h } };
+    }
+    if (!drag) { /* 상자 밖을 누르면 새로 그린다 */
+      drag = { mode: 'draw', p0: p, prev: b ? { x: b.x, y: b.y, w: b.w, h: b.h } : null };
       boxes[active] = { x: p.x * scale, y: p.y * scale, w: 0, h: 0 };
     }
-    view.setPointerCapture(e.pointerId);
+    try { view.setPointerCapture(e.pointerId); } catch (_) {}
     e.preventDefault();
   });
   view.addEventListener('pointermove', function (e) {
@@ -405,16 +413,19 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
     } else if (drag.mode === 'move') {
       b.x = Math.max(0, Math.min(work.width - drag.orig.w, drag.orig.x + dx));
       b.y = Math.max(0, Math.min(work.height - drag.orig.h, drag.orig.y + dy));
-    } else {
-      b.w = Math.max(8 * scale, Math.min(work.width - drag.orig.x, drag.orig.w + dx));
-      b.h = Math.max(8 * scale, Math.min(work.height - drag.orig.y, drag.orig.h + dy));
+    } else { /* 네 모서리 어디서나 크기 조절: 반대쪽 모서리는 고정 */
+      var o = drag.orig, fx = drag.corner.charAt(1) === 'e' ? o.x : o.x + o.w, fy = drag.corner.charAt(0) === 's' ? o.y : o.y + o.h;
+      var mx = Math.max(0, Math.min(work.width, p.x * scale)), my = Math.max(0, Math.min(work.height, p.y * scale)), mn = 8 * scale;
+      var nx = drag.corner.charAt(1) === 'e' ? Math.max(mx, fx + mn) : Math.min(mx, fx - mn);
+      var ny = drag.corner.charAt(0) === 's' ? Math.max(my, fy + mn) : Math.min(my, fy - mn);
+      b.x = Math.min(fx, nx); b.w = Math.abs(nx - fx); b.y = Math.min(fy, ny); b.h = Math.abs(ny - fy);
     }
     render();
   });
   function endDrag() {
     if (!drag) return;
     var b = boxes[active];
-    if (drag.mode === 'draw' && (b.w < 8 * scale || b.h < 8 * scale)) boxes[active] = null;
+    if (drag.mode === 'draw' && (b.w < 8 * scale || b.h < 8 * scale)) boxes[active] = drag.prev || null;
     drag = null; refreshUI(); render();
   }
   view.addEventListener('pointerup', endDrag);
@@ -1324,7 +1335,8 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
       return { done: true, found: best, scans: pick.r.scans, scale: pick.r.scale };
     }
     function summary() {
-      var warn = engineFailed ? ' 인식 엔진을 불러오지 못해 유효기간과 CVC는 직접 지정해야 합니다.' : '';
+      var flipNote = ((rot90 - startRot + 4) % 4) === 2 ? ' 사진이 뒤집혀 있다고 판단해 180° 돌렸습니다. 거꾸로 보이면 ‘위아래 뒤집기’를 눌러 주세요.' : '';
+      var warn = flipNote + (engineFailed ? ' 인식 엔진을 불러오지 못해 유효기간과 CVC는 직접 지정해야 합니다.' : '');
       if (msgs.length) {
         var c = conf === 'high' ? '' : conf === 'mid' ? ' 위치를 한 번 더 확인하세요.' : conf === 'low' ? ' 번호 위치가 불확실합니다. 아래 확대 화면에서 꼭 확인하세요.' : '';
         setMsg('자동으로 찾음: ' + msgs.join(', ') + '.' + c + warn, conf === 'high' || conf === 'none' ? 'ok' : 'warn');
@@ -1347,7 +1359,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
         if (stale()) return;
         if (res.exp) { boxes.exp = res.exp; msgs.push('유효기간'); }
         if (res.cvc) { boxes.cvc = res.cvc; msgs.push('CVC'); }
-        if (!res.exp) return flipProbe(); /* 방향을 잘못 판단했을 수도 있으니, 유효기간이 안 보이면 반대 방향도 확인 */
+        if (!res.exp && !opt.manual) return flipProbe(); /* 방향을 잘못 판단했을 수도 있으니, 유효기간이 안 보이면 반대 방향도 확인 */
       }, function () { engineFailed = true; }).then(function () {
         if (stale()) return;
         refreshUI(); render(); drawVerify(); summary();
@@ -1434,23 +1446,24 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
       return getWorker().then(function () { return orientVote(work, cuts, s.scale); }, function () { engineFailed = true; return null; })
         .then(function (v) {
           if (stale()) return;
-          if (v && !opt.flipped && v.down >= v.up + 4 && v.down >= 9) { rot90 = (rot90 + 2) % 4; rebuild(); return runAuto(my, { flipped: true }); }
+          if (v && !opt.flipped && v.down >= v.up + 5 && v.down >= 11) { rot90 = (rot90 + 2) % 4; rebuild(); return runAuto(my, { flipped: true }); }
           return withNumber(s, cuts);
         });
       });
     });
   }
-  function autoDetect() {
+  var startRot = 0;
+  function autoDetect(manual) {
     if (!work) return Promise.resolve();
     if (busy) { rerun = true; return Promise.resolve(); }
-    busy = true; rerun = false; engineFailed = false;
+    busy = true; rerun = false; engineFailed = false; startRot = rot90;
     var my = ++job;
     $('autoBtn').disabled = true; setBar(null);
-    return runAuto(my).catch(function (e) {
+    return runAuto(my, manual ? { flipped: true, manual: true } : undefined).catch(function (e) {
       setMsg('자동 찾기 중 문제가 생겼습니다. 직접 지정해 주세요.', 'warn');
     }).then(function () {
       busy = false; $('autoBtn').disabled = false; setBar(null);
-      if (rerun) autoDetect();
+      if (rerun) autoDetect(manual);
     });
   }
   $('autoBtn').addEventListener('click', function () {
