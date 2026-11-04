@@ -82,6 +82,9 @@ body {
 .panel { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 .step { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 14px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .step h2 { margin: 0; font-size: 13px; font-weight: 700; letter-spacing: 0.06em; font-family: var(--font-mono); color: var(--muted); text-transform: uppercase; }
+.namebox { display: grid; gap: 6px; margin-bottom: 10px; }
+.namebox label { font-size: 13px; font-weight: 600; }
+.namebox input, .namebox select { font: inherit; font-size: 16px; padding: 10px 12px; border: 1px solid #c9ced6; border-radius: 10px; background: #fff; color: #111; width: 100%; box-sizing: border-box; }
 .row { display: flex; flex-wrap: wrap; gap: 8px; }
 
 .btn {
@@ -199,6 +202,14 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 
       <section class="step" aria-labelledby="s3">
         <h2 id="s3">3 · 결과</h2>
+        <div class="namebox">
+          <label for="nameText">사진에 적을 문구 (선택)</label>
+          <input id="nameText" type="text" maxlength="40" placeholder="예: 홍길동 · 본인확인용" autocomplete="off">
+          <select id="nameMode" aria-label="문구 위치">
+            <option value="strip">사진 아래에 띠로 붙이기 (카드를 가리지 않음)</option>
+            <option value="mark">사진 위에 대각선으로 흐리게 반복</option>
+          </select>
+        </div>
         <button class="btn primary" id="makeBtn" type="button">가려진 사진 만들기</button>
       </section>
     </aside>
@@ -455,6 +466,32 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
     if (b) { var pv = Math.max(pad, b.h * 0.2); o.fillRect(b.x + b.w * midStart / 100, b.y - pv, b.w * (midEnd - midStart) / 100, b.h + pv * 2); done.push('카드번호 가운데 8자리'); } else miss.push('카드번호');
     b = boxes.exp; if (b) { var ph = Math.max(pad, b.h * 0.45), pv2 = Math.max(pad, b.h * 0.25); o.fillRect(b.x - ph, b.y - pv2, b.w + ph * 2, b.h + pv2 * 2); done.push('유효기간'); } else miss.push('유효기간');
     b = boxes.cvc; if (b) { var ph3 = Math.max(pad, b.h * 0.45), pv3 = Math.max(pad, b.h * 0.25); o.fillRect(b.x - ph3, b.y - pv3, b.w + ph3 * 2, b.h + pv3 * 2); done.push('CVC'); } else miss.push('CVC');
+    var label = ($('nameText').value || '').trim();
+    try { localStorage.setItem('cardMaskerName', label); } catch (e) {}
+    if (label) {
+      var mode = $('nameMode').value, W = out.width, H = out.height;
+      if (mode === 'strip') { /* 사진 아래에 흰 띠를 덧붙여 카드 내용을 가리지 않는다 */
+        var fs = Math.max(18, Math.round(W * 0.04)), sh = Math.round(fs * 2.1), c2 = document.createElement('canvas');
+        c2.width = W; c2.height = H + sh;
+        var o2 = c2.getContext('2d'); o2.drawImage(out, 0, 0);
+        o2.fillStyle = '#fff'; o2.fillRect(0, H, W, sh);
+        o2.fillStyle = '#111'; o2.textBaseline = 'middle'; o2.textAlign = 'center';
+        var f2 = fs; o2.font = '700 ' + f2 + 'px ' + getComputedStyle(document.body).fontFamily;
+        while (o2.measureText(label).width > W * 0.94 && f2 > 10) { f2 -= 2; o2.font = '700 ' + f2 + 'px ' + getComputedStyle(document.body).fontFamily; }
+        o2.fillText(label, W / 2, H + sh / 2);
+        out = c2;
+      } else { /* 대각선 반복 문구 */
+        var fs3 = Math.max(16, Math.round(W * 0.035)), o3 = o;
+        o3.save(); o3.globalAlpha = 0.38; o3.font = '700 ' + fs3 + 'px ' + getComputedStyle(document.body).fontFamily;
+        o3.textBaseline = 'middle'; o3.textAlign = 'center'; o3.translate(W / 2, H / 2); o3.rotate(-Math.PI / 6);
+        var stepX = Math.max(o3.measureText(label).width + fs3 * 2, fs3 * 6), stepY = fs3 * 3.4, R = Math.hypot(W, H) / 2, row = 0;
+        for (var yy = -R; yy <= R; yy += stepY, row++) for (var xx = -R + (row % 2 ? stepX / 2 : 0); xx <= R; xx += stepX) {
+          o3.lineWidth = Math.max(2, fs3 * 0.12); o3.strokeStyle = '#000'; o3.strokeText(label, xx, yy);
+          o3.fillStyle = '#fff'; o3.fillText(label, xx, yy);
+        }
+        o3.restore();
+      }
+    }
     out.toBlob(function (blob) {
       if (!blob) { toast('이미지를 만들지 못했습니다. 사진 크기를 줄여 다시 시도하세요.'); return; }
       if (lastUrl) URL.revokeObjectURL(lastUrl);
@@ -469,6 +506,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
       $('report').innerHTML = html;
     }, 'image/png');
   }
+  try { $('nameText').value = localStorage.getItem('cardMaskerName') || ''; } catch (e) {}
   $('makeBtn').addEventListener('click', make);
 
   $('shareBtn').addEventListener('click', function () {
