@@ -860,7 +860,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
             }
             if (U > 3) continue;
             var obj = M - 0.7 * U - 4 * (rs / M) / p - (ti === 1 ? 0.3 : 0) - 0.35 * (T.n - M);
-            if (!best || obj > best.obj) best = { obj: obj, T: T, M: M, U: U, res: rs / M / p, p: p, G: G, e: Array.prototype.slice.call(e, 0, T.n), who: Array.prototype.slice.call(who, 0, T.n) };
+          if (!best || obj > best.obj) best = { obj: obj, T: T, M: M, U: U, res: rs / M / p, p: p, G: G, e: Array.prototype.slice.call(e, 0, T.n), who: Array.prototype.slice.call(who, 0, T.n) };
           }
         }
       });
@@ -991,6 +991,113 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
     for (i = 0, p = 0; i < g2.length; i++, p += 4) g2[i] = bd[p];
     return { g: g2, w: w, h: h, rgba: bd };
   }
+
+  /* ---------- 묶음 찾기: 4자리씩 4묶음이 일정한 간격으로 놓인 줄을 가장자리 에너지로 직접 찾는다.
+     크롬 양각 숫자처럼 한 글자가 여러 조각으로 쪼개져도 묶음 단위로는 안정적으로 보인다 ---------- */
+  function groupScan(gr, mx) {
+    var w = gr.w, h = gr.h, g = gr.g, k = mx / 1600, i, x, y;
+    var G = new Float32Array(w * h), cap = 36;
+    for (y = 1; y < h - 1; y++) for (x = 1; x < w - 1; x++) {
+      i = y * w + x;
+      var v = Math.abs(g[i + 1] - g[i - 1]) + Math.abs(g[i + w] - g[i - w]);
+      G[i] = v > cap ? cap : v;
+    }
+    var S = new Float32Array((h + 1) * w);
+    for (y = 0; y < h; y++) for (x = 0; x < w; x++) S[(y + 1) * w + x] = S[y * w + x] + G[y * w + x];
+    var THETAS = [0, 1.2, -1.2, 2.4, -2.4], best = null, cands = [], E = new Float32Array(w), Es = new Float32Array(w), P = new Float32Array(w + 1);
+    [26, 34, 44, 56].forEach(function (H0) {
+      var H = Math.max(10, Math.round(H0 * k)), step = Math.max(2, Math.round(H / 4)), y0;
+      for (var ti = 0; ti < THETAS.length; ti++) for (y0 = 0; y0 + H <= h; y0 += step) {
+        var tt = Math.tan(THETAS[ti] * Math.PI / 180);
+        for (x = 0; x < w; x++) { var ys = y0 + Math.round((x - w / 2) * tt); if (ys < 0) ys = 0; if (ys + H > h) ys = h - H; E[x] = (S[(ys + H) * w + x] - S[ys * w + x]) / H; }
+        var r = Math.max(1, Math.round(0.1 * H));
+        P[0] = 0; for (x = 0; x < w; x++) P[x + 1] = P[x] + E[x];
+        for (x = 0; x < w; x++) { var a = Math.max(0, x - r), b2 = Math.min(w, x + r + 1); Es[x] = (P[b2] - P[a]) / (b2 - a); }
+        var srt = Array.prototype.slice.call(Es).sort(function (p, q) { return p - q; });
+        var bg = srt[Math.floor(w * 0.2)], hi = srt[Math.floor(w * 0.9)];
+        if (hi - bg < 3) continue;
+        var th = bg + 0.38 * (hi - bg), runs = [], st = -1;
+        for (x = 0; x <= w; x++) {
+          var on = x < w && Es[x] > th;
+          if (on && st < 0) st = x;
+          if (!on && st >= 0) { if (runs.length && st - runs[runs.length - 1][1] < 0.42 * H) runs[runs.length - 1][1] = x; else runs.push([st, x]); st = -1; }
+        }
+        var gs = runs.filter(function (q) { return q[1] - q[0] >= 2.0 * H && q[1] - q[0] <= 4.2 * H; });
+        if (gs.length < 2) continue;
+        var ii, jj, p, q;
+        for (ii = 0; ii < gs.length; ii++) for (jj = ii + 1; jj < gs.length; jj++) for (p = 0; p < 4; p++) for (q = p + 1; q < 4; q++) {
+          var D = (gs[jj][0] - gs[ii][0]) / (q - p);
+          if (D < 3.2 * H || D > 6.2 * H) continue;
+          var m = 0, rs = 0, ws = [], who = [], kk;
+          for (kk = 0; kk < 4; kk++) {
+            var pred = gs[ii][0] + (kk - p) * D, bi = -1, bd = 1e9;
+            gs.forEach(function (gq, gi) { var dd = Math.abs(gq[0] - pred); if (dd < bd) { bd = dd; bi = gi; } });
+            if (bi >= 0 && bd <= 0.12 * D + 0.15 * H) { m++; rs += bd * bd; ws.push(gs[bi][1] - gs[bi][0]); who.push(bi); } else who.push(-1);
+          }
+          if (m < 3) continue;
+          var x0p = gs[ii][0] - p * D; if (x0p < -0.2 * D || x0p + 3 * D + 3 * H > w + 0.3 * D) continue;
+          var mw = median(ws), wcv = 0; ws.forEach(function (v2) { wcv += Math.abs(v2 - mw) / mw; }); wcv /= ws.length;
+          if (wcv > 0.22) continue;
+          var resid = Math.sqrt(rs / m) / D, obj = m - 6 * resid - 3 * wcv + 0.03 * Math.min(hi - bg, 40);
+          obj += 1.5 * (3 * D + mw) / w; /* 줄이 넓게 이어진 묶음일수록 번호일 가능성이 높다 */
+          cands.push({ th: THETAS[ti], obj: obj, m: m, resid: resid, wcv: wcv, D: D, H: H, y0: y0, who: who, gs: gs, x0p: x0p, mw: mw, hi: hi, bg: bg, p: p });
+        }
+      }
+    });
+    cands.sort(function (p, q) { return q.obj - p.obj; });
+    var outs = [], tried = 0, ci;
+    for (ci = 0; ci < cands.length && tried < 60 && outs.length < 3; ci++) {
+      var cd = cands[ci];
+      if (cd.obj < 2.4) break;
+      /* 같은 줄에서 이미 시도한 후보와 거의 같은 것은 건너뛴다 */
+      var dupc = false; for (var z = 0; z < ci; z++) if (cands[z].tried && Math.abs(cands[z].y0 - cd.y0) < 0.7 * cd.H && cands[z].H === cd.H && Math.abs(cands[z].x0p - cd.x0p) < 0.5 * cd.H) { dupc = true; break; }
+      if (dupc) continue;
+      cd.tried = true; tried++;
+      var o1 = finalize(cd);
+      if (!o1) continue;
+      var cyo = o1.win[8].cy, same = false;
+      outs.forEach(function (o2) { if (Math.abs(o2.win[8].cy - cyo) < 0.8 * o1.mh) same = true; });
+      if (!same) outs.push(o1);
+    }
+    return outs;
+    function finalize(best) {
+      var tanT = Math.tan(best.th * Math.PI / 180);
+      function gG(xx, yy) { var q2 = yy + Math.round((xx - w / 2) * tanT); if (q2 < 0) q2 = 0; if (q2 >= h) q2 = h - 1; return G[q2 * w + xx]; }
+    /* 세로 범위를 다듬는다: 묶음 안쪽 가장자리 에너지가 큰 줄만 */
+    var Hb = best.H, ya = Math.max(0, best.y0 - Hb), yb = Math.min(h - 1, best.y0 + 2 * Hb), Py = [], gx = [];
+    best.who.forEach(function (bi, kk) { if (bi >= 0) gx.push([best.gs[bi][0], best.gs[bi][1]]); else gx.push([best.x0p + kk * best.D, best.x0p + kk * best.D + best.mw]); });
+    for (y = ya; y <= yb; y++) { var sm = 0; gx.forEach(function (c) { for (x = Math.max(0, Math.round(c[0])); x < Math.min(w, Math.round(c[1])); x++) sm += gG(x, y); }); Py.push(sm); }
+    var mxP = Math.max.apply(null, Py), cyi = 0; Py.forEach(function (v2, j) { if (v2 === mxP) cyi = j; });
+    var lo = cyi, hiY = cyi; while (lo > 0 && Py[lo - 1] > 0.6 * mxP) lo--; while (hiY < Py.length - 1 && Py[hiY + 1] > 0.6 * mxP) hiY++;
+    var Y0 = ya + lo, Y1 = ya + hiY + 1, mh = Y1 - Y0;
+    window.__grpWhy = { Y0: Y0, Y1: Y1, mh: mh, Hb: Hb, mw: best.mw };
+    if (mh < 0.55 * Hb || mh > 1.9 * Hb) return null;
+    if (best.mw / mh < 2.1 || best.mw / mh > 4.3) return null; /* 숫자 4개 폭 = 높이의 약 3배 */
+    if (best.D / mh < 3.2 || best.D / mh > 5.6) return null;
+    if (best.mw / mh > 3.7) return null; /* 숫자 네 개보다 넓은 묶음(한글·영문 글자 줄)은 제외 */
+    if (mh / w < 0.026 || (3 * best.D + best.mw) / w < 0.4) return null; /* 번호는 크고 카드 폭의 40% 이상에 걸쳐 있다 */
+    /* 숫자 줄은 위아래 여백보다 가장자리 에너지가 뚜렷하게 높다. 카드 모서리나 그림자 같은 한쪽 경계는 걸러낸다 */
+    var inS = 0, upS = 0, dnS = 0, nn = 0, yy2, ya2 = Math.max(0, Math.round(Y0 - 0.9 * mh)), yb2 = Math.min(h, Math.round(Y1 + 0.9 * mh));
+    gx.forEach(function (c, kk) { if (best.who[kk] < 0) return; var xa = Math.max(0, Math.round(c[0])), xb = Math.min(w, Math.round(c[1])); nn += xb - xa;
+      for (yy2 = ya2; yy2 < yb2; yy2++) { var rs2 = 0; for (x = xa; x < xb; x++) rs2 += gG(x, yy2); if (yy2 >= Y0 && yy2 < Y1) inS += rs2; else if (yy2 < Y0 - 0.1 * mh) upS += rs2; else if (yy2 >= Y1 + 0.1 * mh) dnS += rs2; } });
+    var inM = inS / (Math.max(1, nn) * mh), upM = upS / (Math.max(1, nn) * 0.8 * mh), dnM = dnS / (Math.max(1, nn) * 0.8 * mh);
+    if (inM < 1.6 * Math.max(upM, dnM)) return null;
+    /* 묶음마다 글자 밀도가 비슷해야 한다(서명란의 선이나 빈 칸은 밀도가 크게 다르다) */
+    var dens = [];
+    gx.forEach(function (c, kk) { if (best.who[kk] < 0) return; var s3 = 0, n3 = 0; for (var yq = Y0; yq < Y1; yq++) for (x = Math.max(0, Math.round(c[0])); x < Math.min(w, Math.round(c[1])); x++) { s3 += gG(x, yq); n3++; } dens.push(s3 / Math.max(1, n3)); });
+    if (Math.min.apply(null, dens) < 0.55 * Math.max.apply(null, dens)) return null;
+    /* 기울기: 첫 묶음과 마지막 묶음의 세로 무게중심 차이 */
+    function cenY(c) { var s = 0, sy = 0; for (y = Math.max(0, Y0 - mh); y < Math.min(h, Y1 + mh); y++) for (x = Math.max(0, Math.round(c[0])); x < Math.min(w, Math.round(c[1])); x++) { var v2 = gG(x, y); s += v2; sy += v2 * y; } return s ? sy / s : (Y0 + Y1) / 2; }
+    var cy0 = cenY(gx[0]), cy3 = cenY(gx[3]), cxd = (gx[3][0] + gx[3][1] - gx[0][0] - gx[0][1]) / 2, ang = 0; /* 기울기는 상자 높이로 흡수하고 회전 보정은 하지 않는다(보정이 오락가락하는 것을 막음) */
+    var spanW = gx[3][1] - gx[0][0], xcen = (gx[0][0] + gx[3][1]) / 2, shiftC = (xcen - w / 2) * tanT, expY = Math.abs(tanT) * spanW / 2;
+    var YA = Y0 + shiftC - expY, YB = Y1 + shiftC + expY; /* 기울어진 줄을 덮도록 세로 범위를 넓힌다 */
+    var win = [], gi2, di;
+    for (gi2 = 0; gi2 < 4; gi2++) { var gw = gx[gi2][1] - gx[gi2][0], pw = gw / 4; for (di = 0; di < 4; di++) { var d0 = gx[gi2][0] + di * pw + 0.08 * pw, d1 = gx[gi2][0] + (di + 1) * pw - 0.08 * pw; win.push({ x0: d0, x1: d1, y0: YA, y1: YB, cx: (d0 + d1) / 2, cy: (YA + YB) / 2, w: d1 - d0, h: mh }); } }
+    var spanF = (3 * best.D + best.mw) / w, score = (best.m === 2 ? 1.44 : 1.5) + (best.m === 4 ? 0.1 : 0) + Math.max(0, Math.min(0.1, (spanF - 0.35) * 0.5)) + Math.max(0, Math.min(0.12, 0.12 * (1 - best.wcv / 0.15))) + Math.max(0, Math.min(0.1, 0.1 * (1 - best.resid / 0.08)));
+    return { kind: 'grp', relH: mh / w, spanF: spanF, rat: best.mw / mh, score: score, sep: (gx[1][0] - gx[0][1]) / mh, dev: 0, n: 16, i1: 3, i2: 11, win: win, mh: mh, matched: best.m === 4 ? 16 : best.m * 4, angle: ang,
+      cutx: [(gx[0][1] + gx[1][0]) / 2, (gx[2][1] + gx[3][0]) / 2] };
+  }
+  }
   function findNumberLine(canvas, quarter, early) {
     var an = analysisOf(canvas, quarter), gr = grayOf(an.canvas), cache = {}, scans = [], best = null, vi, mx = Math.max(gr.w, gr.h);
     for (vi = 0; vi < VARIANTS.length; vi++) {
@@ -1019,6 +1126,24 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
     return { best: best, scans: scans, scale: an.scale, gr: gr };
   }
 
+  /* 묶음 찾기 결과를 합친다. 방향(90°) 판단에는 쓰지 않고, 방향이 정해진 뒤에만 보충한다(전화번호 같은 숫자 줄이 방향을 흔들지 않도록) */
+  function mergeGroups(res) {
+    if (!res || !res.gr || res.grpDone) return;
+    res.grpDone = true;
+    var gr = res.gr, mx = Math.max(gr.w, gr.h), best = res.best, gl = groupScan(gr, mx) || [];
+    window.__grp = gl[0] || null; (window.__grpHist = window.__grpHist || []).push({ n: gl.length, best: best ? +best.score.toFixed(2) : null }); /* 점검용 */
+    var nullish = !best || best.score < (best.kind === 'lat' ? 1.12 : 1.2); /* 기존 방식이 사실상 못 찾은 경우 */
+    if (nullish) gl = gl.filter(function (o) { return o.spanF >= 0.55 && o.relH >= 0.035; }); /* 아무것도 못 찾은 사진(뒷면 등)에서는 더 확실할 때만 */
+    if (!gl.length) return;
+    /* 기존 방식이 이미 그럴듯하게 읽었으면(글자를 제대로 찾음) 그대로 두고, 약하거나 이상할 때만 묶음 결과로 바꾼다.
+       이상한 경우: 아무것도 못 찾음, 점수가 낮음, 격자에 겨우 맞춘 줄(찾은 글자가 전체의 80% 미만) */
+    var weakBest = !best || best.score < 1.3 || (best.kind === 'lat' && best.matched / best.n < 0.8 && best.score < 1.4);
+    if (!weakBest) return; /* 멀쩡하게 읽었으면 건드리지 않는다(후보가 늘어 번호 줄 재판별이 새로 돌지 않도록) */
+    var allc = (best ? [best].concat(best.cands || []) : []).concat(gl);
+    allc.sort(function (p, q) { return q.score - p.score; });
+    var top0 = allc[0];
+    top0.cands = allc.filter(function (c) { return c !== top0; }).slice(0, 4); res.best = top0;
+  }
   /* ---------- OCR (유효기간, CVC 확인용) ---------- */
   var worker = null, workerP = null, job = 0, busy = false, rerun = false, engineFailed = false;
   function setMsg(text, cls) { var m = $('autoMsg'); m.textContent = text; m.className = 'msg' + (cls ? ' ' + cls : ''); }
@@ -1344,9 +1469,85 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
       return chain.then(function () {
         var cur = null, top = null;
         res.forEach(function (r) { if (r.c === best) cur = r; if (!top || r.sc > top.sc) top = r; });
-        if (cur && top && top.c !== best && top.sc >= 12 && top.sc >= cur.sc + 6) { var keepCands = best.cands; s.found = top.c; s.found.cands = keepCands; }
+        if (cur && top && top.c !== best && ((top.sc >= 12 && top.sc >= cur.sc + 6) || (top.c.kind === 'grp' && top.sc >= 6 && cur.sc <= 2))) { var keepCands = best.cands; s.found = top.c; s.found.cands = keepCands; }
       });
     }, function () { engineFailed = true; });
+  }
+
+
+  /* ---------- 칩 기준 보조 찾기: IC칩(금색 사각형) 바로 아래 줄에 번호가 있는 카드(국내 카드 대부분)에서,
+     글자 조각이 흐트러진 양각·반사 카드의 번호 줄을 칩 위치로 잡는다. 일반 탐지가 약하고 엉뚱한 줄을 골랐을 때만 쓴다. ---------- */
+  function findChip(cv) {
+    var W = cv.width, H = cv.height, g = Math.max(1, Math.round(Math.max(W, H) / 600)), w = Math.floor(W / g), h = Math.floor(H / g);
+    var s = document.createElement('canvas'); s.width = w; s.height = h;
+    var sx = s.getContext('2d', { willReadFrequently: true }); sx.drawImage(cv, 0, 0, w, h);
+    var d = sx.getImageData(0, 0, w, h).data, m = new Uint8Array(w * h), i;
+    for (i = 0; i < w * h; i++) { var R = d[i * 4], G = d[i * 4 + 1], B = d[i * 4 + 2]; m[i] = (R > 130 && G > 95 && R - B > 45 && G - B > 18 && R >= G) ? 1 : 0; }
+    var lab = new Int32Array(w * h), best = null, n = 0, st = [];
+    for (i = 0; i < w * h; i++) {
+      if (!m[i] || lab[i]) continue;
+      n++; var x0 = w, x1 = 0, y0 = h, y1 = 0, cnt = 0; st.length = 0; st.push(i); lab[i] = n;
+      while (st.length) {
+        var p = st.pop(), px = p % w, py = (p / w) | 0; cnt++;
+        if (px < x0) x0 = px; if (px > x1) x1 = px; if (py < y0) y0 = py; if (py > y1) y1 = py;
+        if (px > 0 && m[p - 1] && !lab[p - 1]) { lab[p - 1] = n; st.push(p - 1); }
+        if (px < w - 1 && m[p + 1] && !lab[p + 1]) { lab[p + 1] = n; st.push(p + 1); }
+        if (py > 0 && m[p - w] && !lab[p - w]) { lab[p - w] = n; st.push(p - w); }
+        if (py < h - 1 && m[p + w] && !lab[p + w]) { lab[p + w] = n; st.push(p + w); }
+      }
+      var bw = x1 - x0 + 1, bh = y1 - y0 + 1;
+      if (bw >= w * 0.05 && bw <= w * 0.24 && bh >= bw * 0.55 && bh <= bw * 1.5 && cnt >= bw * bh * 0.45 && (!best || cnt > best.cnt)) best = { cnt: cnt, x0: x0 * g, y0: y0 * g, x1: (x1 + 1) * g, y1: (y1 + 1) * g };
+    }
+    return best;
+  }
+  function chipNumber(f, weakBest) {
+    var cv = work, chip = findChip(cv);
+    if (!chip) return null;
+    var ch = chip.y1 - chip.y0, cw = chip.x1 - chip.x0, W = cv.width, H = cv.height;
+    if (chip.x1 > 0.4 * W) return null; /* 칩이 왼쪽에 있는 배치(국내 카드 대부분)만 다룬다 */
+    if (weakBest) { /* 이미 칩 아래 줄에서 찾았다면 건드리지 않는다 */
+      var cy0 = weakBest.win[weakBest.win.length >> 1].cy / f;
+      if (cy0 > chip.y1 - 0.45 * ch && cy0 < chip.y1 + 1.0 * ch) return null;
+    }
+    var gx = cv.getContext('2d', { willReadFrequently: true });
+    var xa = Math.max(0, Math.round(chip.x0 - 0.5 * ch)), xb = Math.min(W, Math.round(chip.x0 + 9 * ch));
+    var ya = Math.max(0, Math.round(chip.y1 - 0.55 * ch)), yb = Math.min(H, Math.round(chip.y1 + 0.85 * ch));
+    var iw = xb - xa, ih = yb - ya; if (iw < 50 || ih < 20) return null;
+    var im = gx.getImageData(xa, ya, iw, ih).data, gr = new Float32Array(iw * ih), x, y;
+    for (i = 0; i < iw * ih; i++) gr[i] = 0.3 * im[i * 4] + 0.59 * im[i * 4 + 1] + 0.11 * im[i * 4 + 2];
+    var i, ex = new Float32Array(iw * ih);
+    for (y = 1; y < ih - 1; y++) for (x = 1; x < iw - 1; x++) { i = y * iw + x; ex[i] = Math.abs(gr[i + 1] - gr[i - 1]) + Math.abs(gr[i + iw] - gr[i - iw]); }
+    var mh = 0.42 * ch, rowE = new Float32Array(ih);
+    for (y = 0; y < ih; y++) { var sacc = 0; for (x = 0; x < iw; x++) sacc += ex[y * iw + x]; rowE[y] = sacc; }
+    var bestY = -1, bestV = -1, hw = Math.round(mh / 2);
+    var yLo = Math.round(chip.y1 - ya + 0.24 * ch), yHi = Math.round(chip.y1 - ya + 0.36 * ch); /* 칩 아래끝에서 칩 높이의 약 0.3배 아래가 번호 줄의 가운데 */
+    for (y = Math.max(hw, yLo); y <= Math.min(ih - hw - 1, yHi); y++) { /* 칩 아래쪽 주변에서 글자 높이만큼의 띠 중 가장자리가 가장 많은 곳 */
+      var v = 0; for (var k = -hw; k <= hw; k++) v += rowE[Math.max(0, Math.min(ih - 1, y + k))];
+      if (v > bestV) { bestV = v; bestY = y; }
+    }
+    var cy = ya + bestY;
+    var col = new Float32Array(iw);
+    for (x = 0; x < iw; x++) { var c = 0; for (y = Math.max(0, bestY - hw); y <= Math.min(ih - 1, bestY + hw); y++) c += ex[y * iw + x]; col[x] = c; }
+    var sorted = Array.prototype.slice.call(col).sort(function (p, q) { return p - q; });
+    var med = sorted[iw >> 1], p90 = sorted[Math.floor(iw * 0.9)], th = med + 0.35 * (p90 - med);
+    var start = -1, end = -1, gap = 0, maxGap = 0.45 * mh, cx0 = Math.max(0, Math.round(chip.x0 - xa - 0.35 * ch));
+    for (x = cx0; x < iw; x++) { /* 가까운 조각을 이어 붙여, 번호 한 묶음(4자리)만큼 넓은 첫 덩어리를 찾는다 */
+      if (col[x] > th) { if (start < 0) start = x; end = x; gap = 0; }
+      else if (start >= 0 && ++gap > maxGap) { if (end - start >= 1.8 * mh) break; start = -1; gap = 0; }
+    }
+    if (start >= 0 && end - start < 1.8 * mh) start = -1;
+    window.__chipDbg = { start: start, end: end, th: th, med: med, p90: p90, cy: cy, bestY: bestY, xa: xa, iw: iw, ch: ch };
+    if (start < 0) return null;
+    var X0 = xa + start, X1 = xa + end + 1, Wd = (X1 - X0) * 5.2; /* 첫 묶음(4자리)의 너비 x 5.2 = 전체 번호 너비 (묶음 4개 + 사이 간격 3개) */
+    X1 = X0 + Wd;
+    if (Wd < 3.6 * ch || Wd > 8.5 * ch) return null;
+    var Y0 = cy - mh / 2, Y1 = cy + mh / 2, win = [], q, gw = Wd / 5.2, gp = (Wd - 4 * gw) / 3, pitch = gw / 4, idx = 0, grp;
+    for (grp = 0; grp < 4; grp++) for (q = 0; q < 4; q++) {
+      var dx0 = X0 + grp * (gw + gp) + q * pitch, ww = pitch * 0.8;
+      win.push({ x0: dx0 * f, x1: (dx0 + ww) * f, y0: Y0 * f, y1: Y1 * f, cx: (dx0 + ww / 2) * f, cy: cy * f, w: ww * f, h: mh * f });
+    }
+    return { kind: 'chip', score: 1.45, n: 16, matched: 0, dev: 0, mh: mh * f, win: win, i1: 3, i2: 11, sep: gp * f, angle: 0,
+             cutx: [(X0 + gw + gp / 2) * f, (X0 + 3 * gw + 2.5 * gp + 0) * f], relH: null, spanF: null, rat: null, cands: [] };
   }
 
   function runAuto(my, opt) {
@@ -1362,7 +1563,8 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
           if (rq.best && (!pick.r.best || rq.best.score > pick.r.best.score + 0.25)) pick = { q: q, r: rq };
         });
       }
-      var best = pick.r.best;
+      if (pick.q === 0) mergeGroups(pick.r);
+      var best = pick.r.best; (window.__stepLog = window.__stepLog || []).push({ q: pick.q, iter: iter, kind: best && best.kind, sc: best && +best.score.toFixed(2), ang: best && +best.angle.toFixed(2) });
       if (!best || best.score < (best.kind === 'lat' ? 1.12 : 1.2)) return { done: true, found: null, scans: pick.r.scans, scale: pick.r.scale };
       if (pick.q !== 0) { rot90 = (rot90 + pick.q) % 4; rebuild(); iter++; return { done: false }; }
       if (Math.abs(best.angle) > 0.45 && iter < 3) {
@@ -1370,9 +1572,18 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
         $('fine').value = fine; $('fineOut').textContent = (Math.round(fine * 10) / 10) + '°';
         rebuild(); iter++; return { done: false };
       }
+      if (pick.q === 0 && (best.score < 1.55 && (best.matched < 14 || best.n < 15 || best.n > 17))) {
+        try { var ch = chipNumber(pick.r.scale, best); if (ch) { best = ch; window.__chipUsed = true; } } catch (e) { window.__chipErr = String(e); }
+      }
       return { done: true, found: best, scans: pick.r.scans, scale: pick.r.scale };
     }
     function summary() {
+      if (!boxes.exp && boxes.num && numInfo && numInfo.kind === 'chip') { /* BC·국내 카드 배치: 유효기간은 번호 줄 바로 아래, 번호 폭의 43~64% 위치. 글자로 못 읽을 때만 위치로 추정해 가린다 */
+        var nb = boxes.num, mh = nb.h;
+        boxes.exp = { x: nb.x + 0.43 * nb.w, y: nb.y + 1.8 * mh, w: 0.21 * nb.w, h: 0.95 * mh };
+        msgs.push('유효기간(카드 배치로 추정, 위치 확인 필요)');
+        if (conf === 'high') conf = 'mid';
+      }
       var flipNote = ((rot90 - startRot + 4) % 4) === 2 ? ' 사진이 뒤집혀 있다고 판단해 180° 돌렸습니다. 거꾸로 보이면 ‘위아래 뒤집기’를 눌러 주세요.' : '';
       var warn = flipNote + (engineFailed ? ' 인식 엔진을 불러오지 못해 유효기간과 CVC는 직접 지정해야 합니다.' : '');
       if (msgs.length) {
@@ -1386,7 +1597,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
       var f = s.scale, found = s.found;
       boxes = { num: null, exp: null, cvc: null };
       applyNumber(cuts, f);
-      numInfo = { L: cuts.L, S: cuts.S, kind: cuts.kind, dev: cuts.dev, angle: found.angle, score: found.score, matched: found.matched };
+      numInfo = { L: cuts.L, S: cuts.S, kind: cuts.kind, dev: cuts.dev, angle: found.angle, score: found.score, matched: found.matched, relH: found.relH, spanF: found.spanF, rat: found.rat };
       msgs.push('카드번호 ' + (found.matched ? found.matched + '자리를 찾아 16자리로 추정' : cuts.L + '자리'));
       conf = found.score >= 1.7 && cuts.dev === 0 ? 'high' : found.score >= 1.4 ? 'mid' : 'low';
       refreshUI(); render();
@@ -1425,7 +1636,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
           if (b && b.score >= firstScore + 0.2 && b.score >= (b.kind === 'lat' ? 1.12 : 1.2)) {
             var cuts = decideCuts(b);
             boxes = { num: null, exp: null, cvc: null }; applyNumber(cuts, r0.scale);
-            numInfo = { L: cuts.L, S: cuts.S, kind: cuts.kind, dev: cuts.dev, angle: b.angle, score: b.score, matched: b.matched };
+            numInfo = { L: cuts.L, S: cuts.S, kind: cuts.kind, dev: cuts.dev, angle: b.angle, score: b.score, matched: b.matched, relH: b.relH, spanF: b.spanF, rat: b.rat };
             msgs[0] = '카드번호 ' + (b.matched ? b.matched + '자리를 찾아 16자리로 추정' : cuts.L + '자리');
             conf = b.score >= 1.7 && cuts.dev === 0 ? 'high' : b.score >= 1.4 ? 'mid' : 'low';
           } else {
@@ -1484,7 +1695,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
       return getWorker().then(function () { return orientVote(work, cuts, s.scale); }, function () { engineFailed = true; return null; })
         .then(function (v) {
           if (stale()) return;
-          if (v && !opt.flipped && v.down >= v.up + 5 && v.down >= 11) { rot90 = (rot90 + 2) % 4; rebuild(); return runAuto(my, { flipped: true }); }
+          if (v && !opt.flipped && v.down >= v.up + 4 && v.down >= 9) { rot90 = (rot90 + 2) % 4; rebuild(); return runAuto(my, { flipped: true }); }
           return withNumber(s, cuts);
         });
       });
